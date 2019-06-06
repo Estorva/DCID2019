@@ -128,103 +128,122 @@ module  CONV(
     output [11:0] caddr_wr;
     output [2:0]  csel;
 
-    //----------------------------- PARAMETERS -------------------------------//
-
-    // STATES
-    parameter IDLE = 3'b000;
-    parameter CONV = 3'b001;
-    parameter MXPL = 3'b010;
-    parameter FLAT = 3'b011;
-    parameter DONE = 3'b100;
-
     //----------------------------- SUBMODULES -------------------------------//
 
     CONV_SUB conv0 (.clk(clk),
                     .reset(reset),
                     .data(idata),
-                    .addr(iaddr),
+                    .addrRd(iaddr),
+                    .addrWr(convAddr),
                     .resultK0(convResult0),
                     .resultK1(convResult1),
-                    .done(convDone0),
-                    .en(convEnable));
+                    .done(convDone),
+    );
     MXPL_SUB mxpl0 (.clk(clk),
                     .data(convResult0),
                     .result(mxplResult0),
-                    .en(mxplEnable));
+                    .done(mxplDone0)
+    );
     MXPL_SUB mxpl1 (.clk(clk),
-                    .data(convResult0),
-                    .result(mxplResult0),
-                    .en(mxplEnable));
+                    .data(convResult1),
+                    .result(mxplResult1),
+                    .done(mxplDone1),
+    );
 
 
     //----------------------------- VARIABLES --------------------------------//
 
+    reg  [2:0]         cSel;
+    reg  [2:0]         cSelNext;
+    reg  [DATAW-1 : 0] cDataWr;
+    reg  [DATAW-1 : 0] cDataWrNext;
+    reg  [ADDRW-1 : 0] cAddrWr;
+    reg  [ADDRW-1 : 0] cAddrWrNext;
+    reg                mxplSel;
+    // 0 when write mxpl0 to mem; lasts for 2 cycles, one for layer 1, the other
+    // for layer 2 (flattening)
+    reg                mxplSelNext;
+
     wire [DATAW-1 : 0] convResult0;
     wire [DATAW-1 : 0] convResult1;
-    wire               convEnable;
+    wire [ADDRW-1 : 0] convAddr;
+    wire               convDone;
     wire [DATAW-1 : 0] mxplResult0;
     wire [DATAW-1 : 0] mxplResult1;
-    wire               mxplEnable;
+    wire [ADDRW-1 : 0] mxplAddr;
+    wire               mxplDone0;
+    wire               mxplDone1;
 
     //----------------------------- ASSIGNMENT -------------------------------//
 
     assign busy = (state == CONV) | (state == MXPL) | (state == FLAT);
+    assign csel = cSel;
+    assign cwr = (cSel == 3'b000) | (cSel == 3'b001);
+    assign cdata_wr = cDataWr;
+    assign caddr_wr = cAddrWr;
+
     assign convEnable = (state == CONV);
     assign mxplEnable = (state == MXPL);
+    assign mxplAddr = {convAddr[ADDRW-1 : ADDRW / 2 + 1], convAddr[ADDRW / 2 : 1]};
+    // mxplAddr = (convAddr.x / 2, convAddr.y / 2)
 
     //----------------------------- COMBINATIONAL ----------------------------//
 
     always @(*) begin
-        case (state)
-            CONV: begin
-                // fetch pixel from image
-                if (address is valid)
-                    cDataNext0 = iData;
-                else
-                    cDataNext0 = 0;
+        // When convDone is high, convResult0 and 1 will be updated
+        // in the next cycle. If cSel is 010, make it 000 in the next cycle,
+        // and keep it as such until the next convDone signal comes.
+        // In the case of writing maxpooled result to memory, the cSel varies
+        // as such: 0 -(mxplDone)-> 011 -> 101 -> 100 -> 101 -> 0
+        // and mxplSel:        0 -> 0          -> 1          -> 0
 
-                case (count + offset)
-                    n:
-                        k0 = k00
-                        ...
+        if (convDone)            cSelNext = 3'b001;
+        else if (cSel == 3'b010) cSelNext = 3'b000;
+        else if (cSel == 3'b000) cSelNext = cSel;
+        else                     cSelNext = cSel + 3'b001;
 
-                cResultNext = multResult;
+        if (mxplDone0)   cSelNext = 3'b011;
+        else begin
+            case (cSel)
+                3'b011:  cSelNext = 3'b101;
+                3'b100:  cSelNext = 3'b101;
+                3'b101:  cSelNext = (mxplSel ? 3'b000 : 3'b100);
+                    // currently flatening, if mxplSel is 0, i.e.
+                    // writing mxpl of kernel 0 to memory, then
+                    // write mxpl of kernel 1 at next cycle
+                    // If mxplSel is 1, reset to 0 and wait.
+                default: cSelNext = 3'b000;
+            endcase
+        end
 
-                cDataNext1 = cData1 + cResult;
-                // cData1 serves as the result of addition where
-                // cResult is the product of kernel element and pixel
-
-
-                countNext = (count == 8 ? 0 : count + 1);
-            end
-            MXPL: begin
-                // fetch pixel from testfixture memory
-                cDataNext0 = cdata_rd;
-                cDataNext1 = cData0;
-                cResultNext = compResult;
-                countNext = (count == 7 ? 0 : count + 1);
-            end
-            FLAT: begin
-            end
-        endcase
+        if (mxplDone0)           mxplSelNext = 0;
+        else if (cSel == 3'b101) mxplSelNext = ~mxplSel; // 0 -> 1, 1 -> 0
+        else if (cSel != 3'b000) mxplSelNext = mxplSel;  // hold value
+        else                     mxplSelNext = 0;
     end
 
     always @(*) begin
-        // handle kernel k0 and k1 here
+        // The timing relationship of writing convolution result to memory:
+        // t+0 convDone is high
+        // t+1 convDone is low, cSel = 000, convResult0/1 and convAddr is updated
+        // t+2 cSel = 001, cWr = cwr = convResult0, caddr_wr
+        // t+3 cSel = 010, cwr = convResult1
 
-        case (count)
-            0: begin
-                k0 = k00;
-                k1 = k01;
-            ...
+        case (cSelNext)
+            // Determine data to write depending on cSelNext
+            3'b001: cDataWrNext = convResult0;
+            3'b010: cDataWrNext = convResult1;
+            3'b011: cDataWrNext = mxplResult0;
+            3'b100: cDataWrNext = mxplResult1;
+            3'b101: cDataWrNext = (/*TODO*/ ? mxplResult0 : mxplResult1);
         endcase
-    end
 
-    //---------------------------- NEXT-STATE LOGIC ---------------------------//
-
-    always @(*) begin
-        // if 9 additions are done -> MXPL
-        // but additions are not aligned with reading -> offset
+        if (cSel == 3'b000 | cSel == 3'b001)
+            cAddrWrNext = convAddr;
+        else if (cSel == '3'b010 | cSel == 3'b011)
+            cAddrWrNext = mxplAddr;
+        else
+            cAddrWrNext = 0;
     end
 
     //----------------------------- SEQUENTIAL -------------------------------//
@@ -232,12 +251,10 @@ module  CONV(
     always @(posedge clk) begin
         if (!reset) begin
             // CLK EDGE
-            iData <= idata;
-            cData0 <= cDataNext0;
-            cData1 <= cDataNext1;
-            cResult <= cResultNext;
-            state <= stateNext;
-            count <= countNext;
+            cSel <= cSelNext;
+            cDataWr <= cDataWrNext;
+            cAddrWr <= cAddrWrNext;
+            mxplSel <= mxplSelNext;
         end
         else begin
             // RESET

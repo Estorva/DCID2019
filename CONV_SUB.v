@@ -44,7 +44,8 @@ module CONV_SUB(
     input  reset,
     input  data,
     input  en,
-    output addr,
+    output addrRd,
+    output addrWr,
     output resultK0,
     output resultK1,
     output done
@@ -58,7 +59,8 @@ module CONV_SUB(
 
         OUTPUT: resultK0: result of convolution of K0 and image
                 resultK1
-                addr:     upperLeft with offset
+                addrRd:   upperLeft with offset, send to testfixture
+                addrWr:   address of convolution result
                 done:     high when the output is ready, lasts for 1 cycle
 
         Reading image:
@@ -96,6 +98,12 @@ module CONV_SUB(
             Note that since our address is unsigned, 6'b111111 corresponds to
             63 and testfixture will return whatever is on coordinate 63.
 
+            Note also that for the maxpooling unit to function properly, the
+            coordinate of convolution result must vary in this manner:
+
+                (0, 0) -> (0, 1) -> (1, 0) -> (1, 1) -> (2, 0) -> (2, 1) -> ...
+                ... -> (63, 1) -> (0, 2) -> (0, 3) -> (1, 2) -> (1, 3) -> ...
+
     //------------------------------------------------------------------------*/
 
     //----------------------------- I/O PORTS --------------------------------//
@@ -104,7 +112,8 @@ module CONV_SUB(
     input                reset;
     input  [DATAW-1 : 0] data;
     input                en;
-    output [ADDRW-1 : 0] addr;
+    output [ADDRW-1 : 0] addrRd;
+    output [ADDRW-1 : 0] addrWr;
     output [DATAW-1 : 0] resultK0;
     output [DATAW-1 : 0] resultK1;
     output               done;
