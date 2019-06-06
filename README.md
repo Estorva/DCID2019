@@ -1,3 +1,3 @@
 # Diagram
 
-[module.jpg]
+![](module.jpg)
