@@ -1,4 +1,5 @@
 `include "CONV_SUB.v"
+`include "MXPL_SUB.v"
 `timescale 1ns/10ps
 
 `ifndef DATAW
@@ -8,20 +9,25 @@
 // width of address
 `endif
 
+`define DATAN 4096
+// number of pixels in input image (64x64)
+`define RSLTN 2048
+// number of pixels in result image (2x32x32)
+
 module  CONV(
-	input		clk,
-	input		reset,
-	output		busy,
-	input		ready,
-	output		iaddr,
-	input		idata,
-	output	 	cwr,
-	output	 	caddr_wr,
-	output	 	cdata_wr,
-	output	 	crd,
-	output	 	caddr_rd,
-	input	 	cdata_rd,
-	output	 	csel
+    input         clk,
+    input         reset,
+    input         ready,
+    input  [19:0] idata,
+    input  [19:0] cdata_rd,
+    output        busy,
+    output [11:0] iaddr,
+    output        crd,
+    output [11:0] caddr_rd,
+    output        cwr,
+    output [19:0] cdata_wr,
+    output [11:0] caddr_wr,
+    output [2:0]  csel
 	);
 
     /*-------------------------------- SPEC ----------------------------------//
@@ -110,23 +116,39 @@ module  CONV(
             MEM[upperLeft * 2], and when count = 1, we save MEM1[upperLeft] to
             MEM[upperLeft * 2 + count].
 
+        Testbench:
+            The test bench checks for validity of memory after busy is 0 after 1.
+
     //------------------------------------------------------------------------*/
 
-    //----------------------------- I/O PORTS --------------------------------//
+    //----------------------------- VARIABLES --------------------------------//
 
-    input         clk;
-    input         reset;
-    input         ready;
-    input  [19:0] idata;
-    input  [19:0] cdata_rd;
-    output        busy;
-    output [11:0] iaddr;
-    output        crd;
-    output [11:0] caddr_rd;
-    output        cwr;
-    output [19:0] cdata_wr;
-    output [11:0] caddr_wr;
-    output [2:0]  csel;
+    reg  [2:0]          cSel;
+    reg  [2:0]          cSelNext;
+    reg  [`DATAW-1 : 0] cDataWr;
+    reg  [`DATAW-1 : 0] cDataWrNext;
+    reg  [`ADDRW-1 : 0] cAddrWr;
+    reg  [`ADDRW-1 : 0] cAddrWrNext;
+    reg                 mxplSel;
+    // 0 when write mxpl0 to mem; lasts for 2 cycles, one for layer 1, the other
+    // for layer 2 (flattening)
+    reg                 mxplSelNext;
+    reg  [5:0]          convCount;
+    // +1 when conv is done
+    reg  [5:0]          convCountNext;
+    reg                 convEn;
+    // a flag that controls when the CONV_SUB works
+    reg                 convEnNext;
+
+    wire [`DATAW-1 : 0] convResult0;
+    wire [`DATAW-1 : 0] convResult1;
+    wire [`ADDRW-1 : 0] convAddr;
+    wire                convDone;
+    wire [`DATAW-1 : 0] mxplResult0;
+    wire [`DATAW-1 : 0] mxplResult1;
+    wire [`ADDRW-1 : 0] mxplAddr;
+    wire                mxplDone0;
+    wire                mxplDone1;
 
     //----------------------------- SUBMODULES -------------------------------//
 
@@ -137,54 +159,30 @@ module  CONV(
                     .addrWr(convAddr),
                     .resultK0(convResult0),
                     .resultK1(convResult1),
-                    .done(convDone),
+                    .done(convDone)
     );
     MXPL_SUB mxpl0 (.clk(clk),
                     .data(convResult0),
                     .result(mxplResult0),
-                    .done(mxplDone0)
+                    .convDone(convDone),
+                    .mxplDone(mxplDone0)
     );
     MXPL_SUB mxpl1 (.clk(clk),
                     .data(convResult1),
                     .result(mxplResult1),
-                    .done(mxplDone1),
+                    .convDone(convDone),
+                    .mxplDone(mxplDone1)
     );
-
-
-    //----------------------------- VARIABLES --------------------------------//
-
-    reg  [2:0]         cSel;
-    reg  [2:0]         cSelNext;
-    reg  [DATAW-1 : 0] cDataWr;
-    reg  [DATAW-1 : 0] cDataWrNext;
-    reg  [ADDRW-1 : 0] cAddrWr;
-    reg  [ADDRW-1 : 0] cAddrWrNext;
-    reg                mxplSel;
-    // 0 when write mxpl0 to mem; lasts for 2 cycles, one for layer 1, the other
-    // for layer 2 (flattening)
-    reg                mxplSelNext;
-
-    wire [DATAW-1 : 0] convResult0;
-    wire [DATAW-1 : 0] convResult1;
-    wire [ADDRW-1 : 0] convAddr;
-    wire               convDone;
-    wire [DATAW-1 : 0] mxplResult0;
-    wire [DATAW-1 : 0] mxplResult1;
-    wire [ADDRW-1 : 0] mxplAddr;
-    wire               mxplDone0;
-    wire               mxplDone1;
 
     //----------------------------- ASSIGNMENT -------------------------------//
 
-    assign busy = (state == CONV) | (state == MXPL) | (state == FLAT);
+    assign busy = convEn; // WRONG!! NEED TO EXTEND A FEW CYCLES
     assign csel = cSel;
     assign cwr = (cSel == 3'b000) | (cSel == 3'b001);
     assign cdata_wr = cDataWr;
     assign caddr_wr = cAddrWr;
 
-    assign convEnable = (state == CONV);
-    assign mxplEnable = (state == MXPL);
-    assign mxplAddr = {convAddr[ADDRW-1 : ADDRW / 2 + 1], convAddr[ADDRW / 2 : 1]};
+    assign mxplAddr = {convAddr[`ADDRW-1 : `ADDRW/2 + 1], convAddr[`ADDRW/2 : 1]};
     // mxplAddr = (convAddr.x / 2, convAddr.y / 2)
 
     //----------------------------- COMBINATIONAL ----------------------------//
@@ -201,6 +199,9 @@ module  CONV(
         else if (cSel == 3'b010) cSelNext = 3'b000;
         else if (cSel == 3'b000) cSelNext = cSel;
         else                     cSelNext = cSel + 3'b001;
+
+        if (convDone) convCountNext = convCount + 1;
+        else          convCountNext = convCount;
 
         if (mxplDone0)   cSelNext = 3'b011;
         else begin
@@ -235,15 +236,23 @@ module  CONV(
             3'b010: cDataWrNext = convResult1;
             3'b011: cDataWrNext = mxplResult0;
             3'b100: cDataWrNext = mxplResult1;
-            3'b101: cDataWrNext = (/*TODO*/ ? mxplResult0 : mxplResult1);
+            3'b101: cDataWrNext = (mxplSel ? mxplResult1 : mxplResult0);
+            default: cDataWrNext = 0;
         endcase
 
-        if (cSel == 3'b000 | cSel == 3'b001)
-            cAddrWrNext = convAddr;
-        else if (cSel == '3'b010 | cSel == 3'b011)
-            cAddrWrNext = mxplAddr;
-        else
-            cAddrWrNext = 0;
+        if (cSel == 3'b000 || cSel == 3'b001)      cAddrWrNext = convAddr;
+        else if (cSel == 3'b010 || cSel == 3'b011) cAddrWrNext = mxplAddr;
+        else                                       cAddrWrNext = 0;
+    end
+
+    always @(*) begin
+        // Handle convEn
+        // When ready is 1, set busy and convEn to 1 at next cycle
+        // When busy is 1, testfixture senses and set ready back to 0
+        // Turn CONV_SUB off when it has output results 64 times
+        if (ready)                   convEnNext = 1;
+        else if (convCount == 6'd63) convEnNext = 0;
+        else                         convEnNext = convEn;
     end
 
     //----------------------------- SEQUENTIAL -------------------------------//
@@ -255,9 +264,17 @@ module  CONV(
             cDataWr <= cDataWrNext;
             cAddrWr <= cAddrWrNext;
             mxplSel <= mxplSelNext;
+            convCount <= convCountNext;
+            convEn <= convEnNext;
         end
         else begin
-            // RESET
+            cSel <= 0;
+            cDataWr <= 0;
+            cAddrWr <= 0;
+            mxplSel <= 0;
+            convCount <= 0;
+            convEn <= 0;
         end
+    end
 
 endmodule

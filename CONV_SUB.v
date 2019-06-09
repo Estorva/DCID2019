@@ -5,15 +5,13 @@
 // width of address
 `endif
 
-module MULT(
-    input A,
-    input B,
-    output Y
+module MULT(//Because we have to add 8 times by booth encoding method , we must cut pipeline
+    input [`DATAW-1:0] A, //input cData
+    input [`DATAW-1:0] B, //input k0
+	input ENmult, 		//If ENmult = 1 , we update count in MULT
+    output [`DATAW-1:0] Y,
+	output doneMULT //doneMULT = 1 can only maintain one cycle and must be in the previous cycle we leave.
     );
-
-    input  A;
-    input  B;
-    output Y;
 
     /*-------------------------------- SPEC ----------------------------------//
         INPUT:  A, B: multiplicand and multiplier
@@ -23,32 +21,110 @@ module MULT(
         representing a signed integer and the rest 16 bits number after
         the radix point.
     //------------------------------------------------------------------------*/
-
     // TODO
+	//We need a signal to reset count and Ans .
+	//When we start mult function, we reset count and Ans
+	wire [`DATAW-5:0] Mc; //16-bit Multiplicand (textbook Y) (A)
+	wire [`DATAW-5:0] Mp; //16-bit Multiplier (textbook X) (B)
+	reg [`DATAW:0] PP; //17-bit Partial product
+	reg [2*(`DATAW-4)-1:0] Ans; //32-bit Correct Answer
+	reg [2*(`DATAW-4)-1:0] AnsNext;
+	reg [2:0] inputs; // inputs : x_2i+1 x_2i x_2i-1 8 possibility
+	reg [3:0] count; //from 0 to 8 , PP0 -> PP8
+	reg [3:0] countNext;
+	//signed haven't written
+	wire signA ;
+	wire signB ;
+	wire signCorrect ; //the sign of final result
+	reg sign;// For PP
+	assign signA = A[`DATAW-1]; //signA/signB/signCorrect can be replaced
+	assign signB = B[`DATAW-1];
+	assign signCorrect = signA^signB; //determine output Y positive or negative
+	assign Mc = (~A[`DATAW-5:0] & {`DATAW-4{signA}}) |  (A[`DATAW-5:0] & {`DATAW-4{~signA}}) ; //Need to consider positive or negative
+	assign Mp = (~B[`DATAW-5:0] & {`DATAW-4{signB}}) |  (B[`DATAW-5:0] & {`DATAW-4{~signB}}); //Assume unsigned value multiply to each other
+	assign Y =  {{4{signCorrect}},( {(`DATAW-4){signCorrect}} & ~(Ans[2*(`DATAW-4)-1:`DATAW-4]+Ans[`DATAW-5]) | {(`DATAW-4){~signCorrect}} & (Ans[2*(`DATAW-4)-1:`DATAW-4]+Ans[`DATAW-5]) )}; //if Ans[15] = 1 , which means the 17th bit is 1, we have to round it and plus 1 to 16-bit Ans
+	assign doneMULT = (count == 4'b1000); //if doneMULT = 1 , we update offset
+	///combinational
+	always @(*) begin //切PIPELINE為8個addition
+		if(count == 4'b0000 ) inputs = { Mp[1:0] , 0};
+		else if (count == 4'b1000) inputs = { {2{0}} , Mp[`DATAW-5] };
+		else inputs = {Mp[2*count+1:2*count-1]};
+		//inputs determined by Multiplier Mp ( textbook X ) and count
+		case (inputs)
+			3'b000: PP = 0;
+			3'b001: PP = Mc;
+			3'b010: PP = Mc;
+			3'b011: PP = Mc << 1;
+			3'b100:	pp = ~(Mc << 1);
+			3'b101: pp = ~Mc;
+			3'b110: pp = ~Mc;
+			3'b111:	PP = 0;
+			default: PP = 0;
+		endcase
+		sign = PP[`DATAW];
+		//AnsNext must reset when ENmult = 0 .
+		if(~ENmult) AnsNext = 0; //In order to reset Ans , we must delay one cycle .
+		else begin
+			case (count)
+				4'b0000: AnsNext = Ans + {~sign,{2{sign}},PP};
+				4'b0001: AnsNext = Ans + ({1,~sign,PP} << 2);
+				4'b0010: AnsNext = Ans + ({1,~sign,PP} << 4);
+				4'b0011: AnsNext = Ans + ({1,~sign,PP} << 6);
+				4'b0100: AnsNext = Ans + ({1,~sign,PP} << 8);
+				4'b0101: AnsNext = Ans + ({1,~sign,PP} << 10);
+				4'b0110: AnsNext = Ans + ({1,~sign,PP} << 12);
+				4'b0111: AnsNext = Ans + ({~sign,PP} << 14);
+				4'b1000: AnsNext = Ans + (PP[`DATAW-5:0]<< 16);
+				default: AnsNext = Ans;
+			endcase
+		end
 
+	end
+	always @(*) begin
+		//Update count
+		if( ENmult  ) begin //As ENmult = 0 , we reset count
+			countNext = count + 1;
+		end
+		else begin
+			countNext = 4'b0000;
+		end
+	end
+	///sequential
+    always @(posedge clk) begin
+        if (!reset) begin
+			Ans <= AnsNext;
+			count <= countNext;
+		end
+		else begin
+		//RESET
+			Ans <= 0;
+			count <= 0;
+		end
+	end
 endmodule
 
 
-module RELU(A, Y);
-    input  [DATAW-1 : 0] A;
-    output [DATAW-1 : 0] Y;
-
-    assign Y = {DATAW{A[DATAW-1]}} & A;
-
+module RELU(A, Y);//Combine bias and RELU
+    input  [`DATAW-1 : 0] A;
+	input  [`DATAW-1 : 0] Bi; //Bias
+    output [`DATAW-1 : 0] Y;
+	wire 				 biasResult;
+	assign biasResult = A + Bi; //just add directly regardless of positive or negative
+    assign Y = {`DATAW{~biasResult[`DATAW-1]}} & A;
 endmodule
 
 
 
 module CONV_SUB(
-	input  clk,
-    input  reset,
-    input  data,
-    input  en,
-    output addrRd,
-    output addrWr,
-    output resultK0,
-    output resultK1,
-    output done
+    input                clk,
+    input                reset,
+    input  [`DATAW-1 : 0] data, //idata
+    input                en,
+    output [`ADDRW-1 : 0] addrRd,
+    output [`ADDRW-1 : 0] addrWr,
+    output [`DATAW-1 : 0] resultK0,
+    output [`DATAW-1 : 0] resultK1,
+    output               done
 	);
 
     /*-------------------------------- SPEC ----------------------------------//
@@ -100,23 +176,12 @@ module CONV_SUB(
 
             Note also that for the maxpooling unit to function properly, the
             coordinate of convolution result must vary in this manner:
-
-                (0, 0) -> (0, 1) -> (1, 0) -> (1, 1) -> (2, 0) -> (2, 1) -> ...
-                ... -> (63, 1) -> (0, 2) -> (0, 3) -> (1, 2) -> (1, 3) -> ...
+				(Y, X) = upperLeft + (1, 1)
+                (0, 0)  -> (0, 1)  -> (1, 0)  -> (1, 1)
+			 -> (0, 2)  -> (0, 3)  -> (1, 2)  -> (1, 3)...
+         ... -> (62,62) -> (62,63) -> (63,62) -> (63,63) finish all the conv
 
     //------------------------------------------------------------------------*/
-
-    //----------------------------- I/O PORTS --------------------------------//
-
-	input                clk;
-    input                reset;
-    input  [DATAW-1 : 0] data;
-    input                en;
-    output [ADDRW-1 : 0] addrRd;
-    output [ADDRW-1 : 0] addrWr;
-    output [DATAW-1 : 0] resultK0;
-    output [DATAW-1 : 0] resultK1;
-    output               done;
 
     //----------------------------- PARAMETERS -------------------------------//
 
@@ -139,84 +204,173 @@ module CONV_SUB(
     parameter k16 = 20'h03BD7;
     parameter k17 = 20'hFD369;
     parameter k18 = 20'h05E68;
+	//Bias
+	parameter Bias0 = 20'h01310;
+	parameter Bias1 = 20'hF7295;
+
+    //----------------------------- VARIABLES --------------------------------//
+
+    reg  [`DATAW-1 : 0] iData;
+    reg  [`DATAW-1 : 0] cDataNext;
+    reg  [`DATAW-1 : 0] cData;
+    reg  [`DATAW-1 : 0] k0;
+    reg  [`DATAW-1 : 0] k1;
+    // the elements of 0th and 1st kernel as operands of multiplication
+    reg  [`DATAW-1 : 0] addend0;
+    reg  [`DATAW-1 : 0] addend1;
+    // operand of addition, from multResult
+    reg  [`DATAW-1 : 0] sumResultNext0;
+    reg  [`DATAW-1 : 0] sumResultNext1;
+    reg  [`DATAW-1 : 0] sumResult0;
+    reg  [`DATAW-1 : 0] sumResult1;
+    reg  [`DATAW-1 : 0] convResultNext0;
+    reg  [`DATAW-1 : 0] convResultNext1;
+    reg  [`DATAW-1 : 0] convResult0;
+    reg  [`DATAW-1 : 0] convResult1;
+    reg  [`ADDRW-1 : 0] upperLeft;
+    reg  [`ADDRW-1 : 0] upperLeftNext;
+    reg  [3:0]         offset;
+    // the offset to be applied to upperLeft for points in a convolution window
+    reg  [3:0]         offsetNext;
+	reg  [3:0]			countMULT;//Control enMULT/updateSum/updateResult and update upperLeft in the last cycle
+	reg	 [3:0]			countMULTNext;
+    //reg                updateResult;
+	wire				updateSum; //As ... , we update sumResult .(Addend/AddResult 會一直變需要定義什麼時候才要update sum)
+    wire 				updateResult; //As count = 10 , we let updateResult = 1;
+	// when high, assign convResultNext w/ reluResult
+    // this signal can only maintain high for 1 cycle
+	//As reluOK = 1 ,convResult is updated .
+	//reg  [3:0]			count; //用 offset及 upperLeft 來定義 count 來 減少使用count
+    wire [`DATAW-1 : 0] multResult0;
+    wire [`DATAW-1 : 0] multResult1;
+    wire [`DATAW-1 : 0] addResult0;
+    wire [`DATAW-1 : 0] addResult1;
+    wire [`DATAW-1 : 0] reluResult0;
+    wire [`DATAW-1 : 0] reluResult1;
+    wire               resetSum;
+    // when high, assign sumResultNext w/ 0
+	wire 				enMULT;
+	wire 				doneMULT;
+    //----------------------------- ASSIGNMENT -------------------------------//
+	//As both offset and countMULT are not 0 or offset is zero and countMULT is at least two , we set enMULT =1
+	assign enMULT = (countMULT != 4'b0000 & offset != 4'b0000 ) | ( countMULT[3] | countMULT[2] | countMULT[1] & (offset == 4'b0000) );
+	assign resetSum = (offset==4'b0000);
+	assign updateSum =  (offset!=4'b0000 & countMULT == 4'b0001);//If updateSum = 1 , we plus addend to sumResult.
+	assign updateResult = (offset==4'b1010 & countMULT == 4'b0010);//If updateResult = 1 , we update convResult w/ reluResult.
+    assign resultK0 = convResult0;
+    assign resultK1 = convResult1;
+    assign done = updateResult;
+    //done(updateResult) can only maintain high for 1 cycle and  must be in the previous cycle we leave
+	assign addResult0 = addend0 + sumResult0;
+    assign addResult1 = addend1 + sumResult1;
+	assign addrWr = upperLeft + {6'b000001,6'b000001};// output original upperLeft + (1,1)
+	assign addrRd = {upperLeft[`ADDRW-1:`ADDRW/2] + {`ADDRW/2{offset/3}}, upperLeft[`ADDRW/2-1:0] + {`ADDRW/2{offset%3}}}; //If multiplier is the slowest, this method can work
+	//Maybe have better method to assign addrRd
 
     //----------------------------- SUBMODULES -------------------------------//
 
     MULT mult0(.A(cData),
                .B(k0),
-               .Y(multResult0)
+			   .ENmult(enMULT), //input reg output wire
+               .Y(multResult0),
+			   .doneMULT(doneMULT)
     );
     MULT mult1(.A(cData),
                .B(k1),
-               .Y(multResult1)
+			   .ENmult(enMULT),
+               .Y(multResult1),
+			   .doneMULT(doneMULT)
     );
-    RELU relu0(.A(sumResult0)
+    RELU relu0(.A(sumResult0),
+			   .Bi(Bias0),
                .Y(reluResult0)
     );
-    RELU relu1(.A(sumResult1)
+    RELU relu1(.A(sumResult1),
+			   .Bi(Bias1),
                .Y(reluResult1)
     );
-
-    //----------------------------- VARIABLES --------------------------------//
-
-    reg  [DATAW-1 : 0] iData;
-    reg  [DATAW-1 : 0] cDataNext;
-    reg  [DATAW-1 : 0] cData;
-    reg  [DATAW-1 : 0] k0;
-    reg  [DATAW-1 : 0] k1;
-    // the elements of 0th and 1st kernel as operands of multiplication
-    reg  [DATAW-1 : 0] addend0;
-    reg  [DATAW-1 : 0] addend1;
-    // operand of addition, from multResult
-    reg  [DATAW-1 : 0] sumResultNext0;
-    reg  [DATAW-1 : 0] sumResultNext1;
-    reg  [DATAW-1 : 0] sumResult0;
-    reg  [DATAW-1 : 0] sumResult1;
-    reg  [DATAW-1 : 0] convResultNext0;
-    reg  [DATAW-1 : 0] convResultNext1;
-    reg  [DATAW-1 : 0] convResult0;
-    reg  [DATAW-1 : 0] convResult1;
-    reg  [ADDRW-1 : 0] upperLeft;
-    reg  [ADDRW-1 : 0] upperLeftNext;
-    reg  [3:0]         offset;
-    // the offset to be applied to upperLeft for points in a convolution window
-    reg  [3:0]         offsetNext;
-    reg                updateResult;
-    // when high, assign convResultNext w/ reluResult
-    // this signal can only maintain high for 1 cycle
-
-    wire [DATAW-1 : 0] multResult0;
-    wire [DATAW-1 : 0] multResult1;
-    wire [DATAW-1 : 0] addResult0;
-    wire [DATAW-1 : 0] addResult1;
-    wire [DATAW-1 : 0] reluResult0;
-    wire [DATAW-1 : 0] reluResult1;
-    wire               resetSum;
-    // when high, assign sumResultNext w/ 0
-
-    //----------------------------- ASSIGNMENT -------------------------------//
-
-    assign resultK0 = convResult0;
-    assign resultK1 = convResult1;
-    assign done = updateResult;
-
-    assign addResult0 = addend0 + sumResult0;
-    assign addResult1 = addend1 + sumResult1;
 
     //----------------------------- COMBINATIONAL ----------------------------//
 
     always @(*) begin
         // TODO
+		//Assign cDataNext to iData or 0
+		//Maybe have better method to write
+		if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0001 | offset == 4'b0010)) cDataNext = 0;
+		else if(upperLeft[`ADDRW/2-1:0] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0011 | offset == 4'b0110)) cDataNext = 0;
+		else if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111110 & (offset == 4'b0010 | offset == 4'b0101 | offset == 4'b1000)) cDataNext = 0;
+		else if(upperLeft[`ADDRW/2-1:0] == 6'b111111 & (offset == 4'b0110 | offset == 4'b0111 | offset == 4'b1000)) cDataNext = 0;
+		else cDataNext = iData;
+		//resetSum and updateSum will not happen at the same time
+		if(resetSum)  begin
+			sumResultNext0 = 0;
+			sumResultNext1 = 0;
+		end
+		else if(updateSum) begin
+			sumResultNext0 = addResult0;
+			sumResultNext1 = addResult1;
+		end
+		else begin
+			sumResultNext0 = sumResult0;
+			sumResultNext1 = sumResult1;
+		end
+		//sumResultNext0 = (updateSum ? addResult0 : sumResult0);//Use en as trigger to update offsetNext, if en = 0 , resetSum always be 1
+		//sumResultNext1 = (updateSum ? addResult1 : sumResult1);
+		if(updateResult) begin //updateResult
+			convResultNext0 = reluResult0;
+			convResultNext1 = reluResult1;
+		end
+		else begin
+			convResultNext0 = convResult0;
+			convResultNext1 = convResult1;
+		end
+		//convResultNext0 = (updateResult ? reluResult0 : convResult0);
+		//convResultNext1 = (updateResult ? reluResult1 : convResult1);
     end
 
     always @(*) begin
         // handle kernel k0 and k1 here
-
-        case (count)
-            0: begin
+        case (offset)
+            4'b0000: begin
                 k0 = k00;
-                k1 = k01;
-            ...
+                k1 = k10;
+			end
+            4'b0001: begin
+				k0 = k01;
+				k1 = k11;
+			end
+			4'b0010: begin
+				k0 = k02;
+				k1 = k12;
+			end
+			4'b0011: begin
+				k0 = k03;
+				k1 = k13;
+			end
+			4'b0100: begin
+				k0 = k04;
+				k1 = k14;
+			end
+			4'b0101: begin
+				k0 = k05;
+				k1 = k15;
+			end
+			4'b0110: begin
+				k0 = k06;
+				k1 = k16;
+			end
+			4'b0111: begin
+				k0 = k07;
+				k1 = k17;
+			end
+			4'b1000: begin
+				k0 = k08;
+				k1 = k18;
+			end
+			default begin
+				k0 = k00;
+				k1 = k10;
+			end
         endcase
     end
 
@@ -224,7 +378,45 @@ module CONV_SUB(
 
     always @(*) begin
         // update count and upperLeft here
-    end
+		//update countMULT and offset using en and doneMULT
+		if(en) begin
+
+			//upperLeftNext = upperLeft;
+			if(doneMULT) begin
+				offsetNext = offset + 1;
+				countMULTNext = 4'b0000;//countMULTNext reset
+			end
+			else begin
+				countMULTNext = countMULT + 1;
+				offsetNext = offset;
+			end
+		end
+		else begin
+			offsetNext = 4'b0000;
+			countMULTNext = 4'b0000;
+		end
+
+		//update upperLeft using offset and countMULT without using en .
+		if(offset==4'b1010 & countMULT == 4'b0011)begin //Therefore, we can let en = 0 when convResult is updated and update UpperLeft next cycle.
+			//go zigzag									//Although , we have left CONV_SUB :)
+			if((upperLeft[`ADDRW-1:`ADDRW/2] == upperLeft[`ADDRW/2-1:0]) & upperLeft[0])//Y = X = odd
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 1; // X_next = X+1
+			else if(upperLeft[`ADDRW-1:`ADDRW/2]+1 == upperLeft[`ADDRW/2-1:0] ) //Y = X - 1
+			begin
+				upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] + 1; // Y_next = Y+1
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] - 1;     // X_next = X-1
+			end
+			else if(upperLeft[`ADDRW-1:`ADDRW/2] == upperLeft[`ADDRW/2-1:0]+1 )  //Y = X + 1
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 1; // X_next = X+1
+			else //(upperLeft[`ADDRW-1:`ADDRW/2] == upperLeft[`ADDRW/2-1:0]) & (~upperLeft[0])
+			begin// Y = X = even
+				upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] - 1; // Y_next = Y-1
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 1;     // X_next = X+1
+			end
+		end
+		else
+			upperLeftNext = upperLeft;
+	end
 
     //----------------------------- SEQUENTIAL -------------------------------//
 
@@ -241,9 +433,14 @@ module CONV_SUB(
             convResult1 <= convResultNext1;
             upperLeft <= upperLeftNext;
             offset <= offsetNext;
+			countMULT <= countMULTNext; // one more register , but it can do many thing !
         end
         else begin
             // RESET
+			upperLeft <= {6'b111111,6'b111111};
+			offset <= 4'b0000;
+			countMULT <= 4'b0000;
         end
+    end
 
 endmodule
