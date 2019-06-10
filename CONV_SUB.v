@@ -6,9 +6,11 @@
 `endif
 
 module MULT(//Because we have to add 8 times by booth encoding method , we must cut pipeline
-    input [`DATAW-1:0] A, //input cData
+    input clk,
+	input reset,
+	input [`DATAW-1:0] A, //input cData
     input [`DATAW-1:0] B, //input k0
-	input ENmult, 		//If ENmult = 1 , we update count in MULT
+	input enMULT, 		//If enMULT = 1 , we update count in MULT
     output [`DATAW-1:0] Y,
 	output doneMULT //doneMULT = 1 can only maintain one cycle and must be in the previous cycle we leave.
     );
@@ -42,47 +44,49 @@ module MULT(//Because we have to add 8 times by booth encoding method , we must 
 	assign signCorrect = signA^signB; //determine output Y positive or negative
 	assign Mc = (~A[`DATAW-5:0] & {`DATAW-4{signA}}) |  (A[`DATAW-5:0] & {`DATAW-4{~signA}}) ; //Need to consider positive or negative
 	assign Mp = (~B[`DATAW-5:0] & {`DATAW-4{signB}}) |  (B[`DATAW-5:0] & {`DATAW-4{~signB}}); //Assume unsigned value multiply to each other
-	assign Y =  {{4{signCorrect}},( {(`DATAW-4){signCorrect}} & ~(Ans[2*(`DATAW-4)-1:`DATAW-4]+Ans[`DATAW-5]) | {(`DATAW-4){~signCorrect}} & (Ans[2*(`DATAW-4)-1:`DATAW-4]+Ans[`DATAW-5]) )}; //if Ans[15] = 1 , which means the 17th bit is 1, we have to round it and plus 1 to 16-bit Ans
+	assign Y =  {{4{signCorrect}},( {(`DATAW-4){signCorrect}} & ~(Ans[2*(`DATAW-4)-1:`DATAW-4]+Ans[`DATAW-5])
+				| {(`DATAW-4){~signCorrect}} & (Ans[2*(`DATAW-4)-1:`DATAW-4]+Ans[`DATAW-5]) )}; //if Ans[15] = 1 , which means the 17th bit is 1, we have to round it and plus 1 to 16-bit Ans
 	assign doneMULT = (count == 4'b1000); //if doneMULT = 1 , we update offset
 	///combinational
-	always @(*) begin //切PIPELINE為8個addition
-		if(count == 4'b0000 ) inputs = { Mp[1:0] , 0};
-		else if (count == 4'b1000) inputs = { {2{0}} , Mp[`DATAW-5] };
-		else inputs = {Mp[2*count+1:2*count-1]};
+	always @(*) begin //cut "pipeline" to 8 addition
+		if(count == 4'b0000 ) inputs = { Mp[1:0] , 1'b0};
+		else if (count == 4'b1000) inputs = { 2'b00 , Mp[`DATAW-5] };
+		//else inputs = {Mp[(count << 1)+1:(count << 1)-1]};
+		else inputs = Mp[((count<<1)+1)-:3];
+		//$display("count = %b", count);
 		//inputs determined by Multiplier Mp ( textbook X ) and count
 		case (inputs)
 			3'b000: PP = 0;
 			3'b001: PP = Mc;
 			3'b010: PP = Mc;
 			3'b011: PP = Mc << 1;
-			3'b100:	pp = ~(Mc << 1);
-			3'b101: pp = ~Mc;
-			3'b110: pp = ~Mc;
+			3'b100:	PP = ~(Mc << 1);
+			3'b101: PP = ~Mc;
+			3'b110: PP = ~Mc;
 			3'b111:	PP = 0;
 			default: PP = 0;
 		endcase
 		sign = PP[`DATAW];
-		//AnsNext must reset when ENmult = 0 .
-		if(~ENmult) AnsNext = 0; //In order to reset Ans , we must delay one cycle .
+		//AnsNext must reset when enMULT = 0 .
+		if(~enMULT) AnsNext = 0; //In order to reset Ans , we must delay one cycle .
 		else begin
 			case (count)
 				4'b0000: AnsNext = Ans + {~sign,{2{sign}},PP};
-				4'b0001: AnsNext = Ans + ({1,~sign,PP} << 2);
-				4'b0010: AnsNext = Ans + ({1,~sign,PP} << 4);
-				4'b0011: AnsNext = Ans + ({1,~sign,PP} << 6);
-				4'b0100: AnsNext = Ans + ({1,~sign,PP} << 8);
-				4'b0101: AnsNext = Ans + ({1,~sign,PP} << 10);
-				4'b0110: AnsNext = Ans + ({1,~sign,PP} << 12);
+				4'b0001: AnsNext = Ans + ({1'b1,~sign,PP} << 2);
+				4'b0010: AnsNext = Ans + ({1'b1,~sign,PP} << 4);
+				4'b0011: AnsNext = Ans + ({1'b1,~sign,PP} << 6);
+				4'b0100: AnsNext = Ans + ({1'b1,~sign,PP} << 8);
+				4'b0101: AnsNext = Ans + ({1'b1,~sign,PP} << 10);
+				4'b0110: AnsNext = Ans + ({1'b1,~sign,PP} << 12);
 				4'b0111: AnsNext = Ans + ({~sign,PP} << 14);
 				4'b1000: AnsNext = Ans + (PP[`DATAW-5:0]<< 16);
 				default: AnsNext = Ans;
 			endcase
 		end
-
 	end
 	always @(*) begin
 		//Update count
-		if( ENmult  ) begin //As ENmult = 0 , we reset count
+		if( enMULT  ) begin //As enMULT = 0 , we reset count
 			countNext = count + 1;
 		end
 		else begin
@@ -94,6 +98,7 @@ module MULT(//Because we have to add 8 times by booth encoding method , we must 
         if (!reset) begin
 			Ans <= AnsNext;
 			count <= countNext;
+			//$display("Ans = %h",Ans);
 		end
 		else begin
 		//RESET
@@ -104,27 +109,27 @@ module MULT(//Because we have to add 8 times by booth encoding method , we must 
 endmodule
 
 
-module RELU(A, Y);//Combine bias and RELU
+module RELU(A, Bi, Y);//Combine bias and RELU
     input  [`DATAW-1 : 0] A;
 	input  [`DATAW-1 : 0] Bi; //Bias
     output [`DATAW-1 : 0] Y;
-	wire 				 biasResult;
+	wire   [`DATAW-1 : 0] biasResult;
 	assign biasResult = A + Bi; //just add directly regardless of positive or negative
-    assign Y = {`DATAW{~biasResult[`DATAW-1]}} & A;
+    assign Y = {`DATAW{~biasResult[`DATAW-1]}} & biasResult;
 endmodule
 
 
 
 module CONV_SUB(
-    input                clk,
-    input                reset,
+    input                 clk,
+    input                 reset,
     input  [`DATAW-1 : 0] data, //idata
-    input                en,
+    input                 en,
     output [`ADDRW-1 : 0] addrRd,
     output [`ADDRW-1 : 0] addrWr,
     output [`DATAW-1 : 0] resultK0,
     output [`DATAW-1 : 0] resultK1,
-    output               done
+    output                done
 	);
 
     /*-------------------------------- SPEC ----------------------------------//
@@ -232,6 +237,8 @@ module CONV_SUB(
     reg  [3:0]         offset;
     // the offset to be applied to upperLeft for points in a convolution window
     reg  [3:0]         offsetNext;
+	reg  [`ADDRW/2-1:0] Q; //Quotient from 0 to 2
+	reg  [`ADDRW/2-1:0] R; //Remainder from 0 to 2
 	reg  [3:0]			countMULT;//Control enMULT/updateSum/updateResult and update upperLeft in the last cycle
 	reg	 [3:0]			countMULTNext;
     //reg                updateResult;
@@ -253,10 +260,11 @@ module CONV_SUB(
 	wire 				doneMULT;
     //----------------------------- ASSIGNMENT -------------------------------//
 	//As both offset and countMULT are not 0 or offset is zero and countMULT is at least two , we set enMULT =1
+
 	assign enMULT = (countMULT != 4'b0000 & offset != 4'b0000 ) | ( countMULT[3] | countMULT[2] | countMULT[1] & (offset == 4'b0000) );
 	assign resetSum = (offset==4'b0000);
 	assign updateSum =  (offset!=4'b0000 & countMULT == 4'b0001);//If updateSum = 1 , we plus addend to sumResult.
-	assign updateResult = (offset==4'b1010 & countMULT == 4'b0010);//If updateResult = 1 , we update convResult w/ reluResult.
+	assign updateResult = (offset==4'b1001 & countMULT == 4'b0010);//If updateResult = 1 , we update convResult w/ reluResult.
     assign resultK0 = convResult0;
     assign resultK1 = convResult1;
     assign done = updateResult;
@@ -264,20 +272,25 @@ module CONV_SUB(
 	assign addResult0 = addend0 + sumResult0;
     assign addResult1 = addend1 + sumResult1;
 	assign addrWr = upperLeft + {6'b000001,6'b000001};// output original upperLeft + (1,1)
-	assign addrRd = {upperLeft[`ADDRW-1:`ADDRW/2] + {`ADDRW/2{offset/3}}, upperLeft[`ADDRW/2-1:0] + {`ADDRW/2{offset%3}}}; //If multiplier is the slowest, this method can work
-	//Maybe have better method to assign addrRd
+	//assign addrRd = {upperLeft[`ADDRW-1:`ADDRW/2] + {`ADDRW/2{offset/3}}, upperLeft[`ADDRW/2-1:0] + {`ADDRW/2{offset%3}}};
+	assign addrRd = {upperLeft[`ADDRW-1:`ADDRW/2] + Q , upperLeft[`ADDRW/2-1:0] + R};
+	// divider "/" 只能用在除以2的冪次方
 
     //----------------------------- SUBMODULES -------------------------------//
 
-    MULT mult0(.A(cData),
+    MULT mult0(.clk(clk),
+			   .reset(reset),
+			   .A(cData),
                .B(k0),
-			   .ENmult(enMULT), //input reg output wire
+			   .enMULT(enMULT), //input reg output wire
                .Y(multResult0),
 			   .doneMULT(doneMULT)
     );
-    MULT mult1(.A(cData),
+    MULT mult1(.clk(clk),
+			   .reset(reset),
+			   .A(cData),
                .B(k1),
-			   .ENmult(enMULT),
+			   .enMULT(enMULT),
                .Y(multResult1),
 			   .doneMULT(doneMULT)
     );
@@ -292,10 +305,18 @@ module CONV_SUB(
 
     //----------------------------- COMBINATIONAL ----------------------------//
 
-    always @(*) begin
+	always @(*) begin
         // TODO
 		//Assign cDataNext to iData or 0
 		//Maybe have better method to write
+		//$display("enMULT = %b",enMULT);
+		//$display("doneMULT = %b",doneMULT);
+		//$display("offset = %b ",offset);
+		//$display("Q = %b",Q);
+		//$display("R = %b",R);
+		//$display("countMULT = %b" , countMULT);
+		//$display("addrRd = %b ",addrRd);
+		//$display("addrWr = %b ",addrWr);
 		if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0001 | offset == 4'b0010)) cDataNext = 0;
 		else if(upperLeft[`ADDRW/2-1:0] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0011 | offset == 4'b0110)) cDataNext = 0;
 		else if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111110 & (offset == 4'b0010 | offset == 4'b0101 | offset == 4'b1000)) cDataNext = 0;
@@ -330,46 +351,67 @@ module CONV_SUB(
 
     always @(*) begin
         // handle kernel k0 and k1 here
+		//deal with addrRd w/ Quotient Q and Remainder R
         case (offset)
             4'b0000: begin
                 k0 = k00;
                 k1 = k10;
+				Q = 6'b000000;
+				R = 6'b000000;
 			end
             4'b0001: begin
 				k0 = k01;
 				k1 = k11;
+				Q = 6'b000000;
+				R = 6'b000001;
 			end
 			4'b0010: begin
 				k0 = k02;
 				k1 = k12;
+				Q = 6'b000000;
+				R = 6'b000010;
 			end
 			4'b0011: begin
 				k0 = k03;
 				k1 = k13;
+				Q = 6'b000001;
+				R = 6'b000000;
 			end
 			4'b0100: begin
 				k0 = k04;
 				k1 = k14;
+				Q = 6'b000001;
+				R = 6'b000001;
 			end
 			4'b0101: begin
 				k0 = k05;
 				k1 = k15;
+				Q = 6'b000001;
+				R = 6'b000010;
 			end
 			4'b0110: begin
 				k0 = k06;
 				k1 = k16;
+				Q = 6'b000010;
+				R = 6'b000000;
 			end
 			4'b0111: begin
 				k0 = k07;
 				k1 = k17;
+				Q = 6'b000010;
+				R = 6'b000001;
 			end
 			4'b1000: begin
 				k0 = k08;
 				k1 = k18;
+				Q = 6'b000010;
+				R = 6'b000010;
 			end
 			default begin
 				k0 = k00;
 				k1 = k10;
+				Q = 6'b000000;
+				R = 6'b000000;
 			end
         endcase
     end
@@ -379,43 +421,54 @@ module CONV_SUB(
     always @(*) begin
         // update count and upperLeft here
 		//update countMULT and offset using en and doneMULT
-		if(en) begin
-
+		//if(en) begin
+		//en is always on until 64 convolution finishes
 			//upperLeftNext = upperLeft;
-			if(doneMULT) begin
-				offsetNext = offset + 1;
+			if(offset==4'b1001 & countMULT == 4'b0010)
+				offsetNext = 4'b0000;
+				//countMULT =       ;
+			else if(doneMULT) begin
+				offsetNext = offset + 4'b0001;
 				countMULTNext = 4'b0000;//countMULTNext reset
 			end
 			else begin
-				countMULTNext = countMULT + 1;
+				countMULTNext = countMULT + 4'b0001;
 				offsetNext = offset;
 			end
-		end
-		else begin
-			offsetNext = 4'b0000;
-			countMULTNext = 4'b0000;
-		end
+
+		//end
+		//else begin
+			//offsetNext = 4'b0000;
+			//countMULTNext = 4'b0000;
+		//end
 
 		//update upperLeft using offset and countMULT without using en .
-		if(offset==4'b1010 & countMULT == 4'b0011)begin //Therefore, we can let en = 0 when convResult is updated and update UpperLeft next cycle.
+		if(offset==4'b1001 & countMULT == 4'b0010)begin //Therefore, we can let en = 0 when convResult is updated and update UpperLeft next cycle.
 			//go zigzag									//Although , we have left CONV_SUB :)
-			if((upperLeft[`ADDRW-1:`ADDRW/2] == upperLeft[`ADDRW/2-1:0]) & upperLeft[0])//Y = X = odd
-				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 1; // X_next = X+1
-			else if(upperLeft[`ADDRW-1:`ADDRW/2]+1 == upperLeft[`ADDRW/2-1:0] ) //Y = X - 1
+			if(upperLeft[`ADDRW/2] & upperLeft[0] )//Y = odd, X = odd
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 6'b000001; // X_next = X+1
+			else if(upperLeft[`ADDRW/2] & ~upperLeft[0] ) //Y = odd, X = even
 			begin
-				upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] + 1; // Y_next = Y+1
-				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] - 1;     // X_next = X-1
+				upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] + 6'b000001; // Y_next = Y+1
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] - 6'b000001;     // X_next = X-1
 			end
-			else if(upperLeft[`ADDRW-1:`ADDRW/2] == upperLeft[`ADDRW/2-1:0]+1 )  //Y = X + 1
-				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 1; // X_next = X+1
-			else //(upperLeft[`ADDRW-1:`ADDRW/2] == upperLeft[`ADDRW/2-1:0]) & (~upperLeft[0])
-			begin// Y = X = even
-				upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] - 1; // Y_next = Y-1
-				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 1;     // X_next = X+1
+			else if( ~upperLeft[`ADDRW/2] & upperLeft[0] )  //Y = even, X = odd
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 6'b000001; // X_next = X+1
+			else if( ~upperLeft[`ADDRW/2] & ~upperLeft[0] & ( upperLeft[`ADDRW/2-1:0] == 6'b111110 ) )
+			begin// Y = even, X = even
+				upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] + 6'b000001; // Y_next = Y+1
+				upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 6'b000001;     // X_next = X+1
 			end
+			else //~upperLeft[`ADDRW/2] & ~upperLeft[0] & ( upperLeft[`ADDRW/2-1:0] != 6'b111110
+				begin
+					upperLeftNext[`ADDRW-1:`ADDRW/2] = upperLeft[`ADDRW-1:`ADDRW/2] - 6'b000001; // Y_next = Y-1
+					upperLeftNext[`ADDRW/2-1:0] = upperLeft[`ADDRW/2-1:0] + 6'b000001;     // X_next = X+1
+				end
+
 		end
 		else
 			upperLeftNext = upperLeft;
+		//$display("upperLeftNext is %b",upperLeftNext);
 	end
 
     //----------------------------- SEQUENTIAL -------------------------------//
@@ -440,6 +493,8 @@ module CONV_SUB(
 			upperLeft <= {6'b111111,6'b111111};
 			offset <= 4'b0000;
 			countMULT <= 4'b0000;
+            convResult0 <= 0;
+            convResult1 <= 0;
         end
     end
 

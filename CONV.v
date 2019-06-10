@@ -1,6 +1,6 @@
 `include "CONV_SUB.v"
 `include "MXPL_SUB.v"
-`timescale 1ns/10ps
+`timescale 1ns/100ps
 
 `ifndef DATAW
 `define DATAW 20
@@ -133,12 +133,14 @@ module  CONV(
     // 0 when write mxpl0 to mem; lasts for 2 cycles, one for layer 1, the other
     // for layer 2 (flattening)
     reg                 mxplSelNext;
-    reg  [5:0]          convCount;
+    reg  [11:0]         convCount;
     // +1 when conv is done
-    reg  [5:0]          convCountNext;
+    reg  [11:0]         convCountNext;
     reg                 convEn;
     // a flag that controls when the CONV_SUB works
     reg                 convEnNext;
+    reg                 busyReg;
+    reg                 busyRegNext;
 
     wire [`DATAW-1 : 0] convResult0;
     wire [`DATAW-1 : 0] convResult1;
@@ -149,12 +151,14 @@ module  CONV(
     wire [`ADDRW-1 : 0] mxplAddr;
     wire                mxplDone0;
     wire                mxplDone1;
+    wire                waitDone;
 
     //----------------------------- SUBMODULES -------------------------------//
 
     CONV_SUB conv0 (.clk(clk),
                     .reset(reset),
                     .data(idata),
+					.en(convEn),
                     .addrRd(iaddr),
                     .addrWr(convAddr),
                     .resultK0(convResult0),
@@ -162,12 +166,14 @@ module  CONV(
                     .done(convDone)
     );
     MXPL_SUB mxpl0 (.clk(clk),
+                    .reset(reset),
                     .data(convResult0),
                     .result(mxplResult0),
                     .convDone(convDone),
                     .mxplDone(mxplDone0)
     );
     MXPL_SUB mxpl1 (.clk(clk),
+                    .reset(reset),
                     .data(convResult1),
                     .result(mxplResult1),
                     .convDone(convDone),
@@ -176,14 +182,17 @@ module  CONV(
 
     //----------------------------- ASSIGNMENT -------------------------------//
 
-    assign busy = convEn; // WRONG!! NEED TO EXTEND A FEW CYCLES
+    assign busy = busyReg;
     assign csel = cSel;
-    assign cwr = (cSel == 3'b000) | (cSel == 3'b001);
+    assign cwr = (cSel != 3'b000);
     assign cdata_wr = cDataWr;
     assign caddr_wr = cAddrWr;
+    assign crd = 0;
 
     assign mxplAddr = {convAddr[`ADDRW-1 : `ADDRW/2 + 1], convAddr[`ADDRW/2 : 1]};
     // mxplAddr = (convAddr.x / 2, convAddr.y / 2)
+    assign waitDone = (convCount == 12'd0);
+    // when count is 4095, wait for done of MXPL
 
     //----------------------------- COMBINATIONAL ----------------------------//
 
@@ -195,27 +204,25 @@ module  CONV(
         // as such: 0 -(mxplDone)-> 011 -> 101 -> 100 -> 101 -> 0
         // and mxplSel:        0 -> 0          -> 1          -> 0
 
-        if (convDone)            cSelNext = 3'b001;
-        else if (cSel == 3'b010) cSelNext = 3'b000;
-        else if (cSel == 3'b000) cSelNext = cSel;
-        else                     cSelNext = cSel + 3'b001;
-
-        if (convDone) convCountNext = convCount + 1;
-        else          convCountNext = convCount;
-
-        if (mxplDone0)   cSelNext = 3'b011;
+        if (convDone)       cSelNext = 3'b001;
+        else if (mxplDone0) cSelNext = 3'b011;
         else begin
             case (cSel)
+                3'b000:  cSelNext = cSel;
+                3'b010:  cSelNext = 3'b000;
                 3'b011:  cSelNext = 3'b101;
                 3'b100:  cSelNext = 3'b101;
                 3'b101:  cSelNext = (mxplSel ? 3'b000 : 3'b100);
-                    // currently flatening, if mxplSel is 0, i.e.
+                    // currently flattening, if mxplSel is 0, i.e.
                     // writing mxpl of kernel 0 to memory, then
                     // write mxpl of kernel 1 at next cycle
                     // If mxplSel is 1, reset to 0 and wait.
-                default: cSelNext = 3'b000;
+                default: cSelNext = cSel + 3'b001;
             endcase
         end
+
+        if (convDone) convCountNext = convCount + 1;
+        else          convCountNext = convCount;
 
         if (mxplDone0)           mxplSelNext = 0;
         else if (cSel == 3'b101) mxplSelNext = ~mxplSel; // 0 -> 1, 1 -> 0
@@ -250,9 +257,19 @@ module  CONV(
         // When ready is 1, set busy and convEn to 1 at next cycle
         // When busy is 1, testfixture senses and set ready back to 0
         // Turn CONV_SUB off when it has output results 64 times
-        if (ready)                   convEnNext = 1;
-        else if (convCount == 6'd63) convEnNext = 0;
-        else                         convEnNext = convEn;
+        if (ready)                      convEnNext = 1;
+        else if (convCount == 12'd4095) convEnNext = 0;
+        else                            convEnNext = convEn;
+    end
+
+    always @(*) begin
+        // Handle busy state
+        // If ready, set busy to 1
+        // If MXPL is done after 4096 times of CONV, set busy to 0
+        // Otherwise maintain state
+        if (ready)                                    busyRegNext = 1;
+        else if (waitDone & cSel == 3'b101 & mxplSel) busyRegNext = 0;
+        else                                          busyRegNext = busyReg;
     end
 
     //----------------------------- SEQUENTIAL -------------------------------//
@@ -266,6 +283,7 @@ module  CONV(
             mxplSel <= mxplSelNext;
             convCount <= convCountNext;
             convEn <= convEnNext;
+            busyReg <= busyRegNext;
         end
         else begin
             cSel <= 0;
@@ -274,6 +292,7 @@ module  CONV(
             mxplSel <= 0;
             convCount <= 0;
             convEn <= 0;
+            busyReg <= 0;
         end
     end
 
