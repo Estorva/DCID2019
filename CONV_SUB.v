@@ -234,14 +234,15 @@ module CONV_SUB(
     reg  [`DATAW-1 : 0] convResult1;
     reg  [`ADDRW-1 : 0] upperLeft;
     reg  [`ADDRW-1 : 0] upperLeftNext;
-    reg  [3:0]         offset;
+    reg  [3:0]          offset;
     // the offset to be applied to upperLeft for points in a convolution window
-    reg  [3:0]         offsetNext;
+    reg  [3:0]          offsetNext;
 	reg  [`ADDRW/2-1:0] Q; //Quotient from 0 to 2
 	reg  [`ADDRW/2-1:0] R; //Remainder from 0 to 2
 	reg  [3:0]			countMULT;//Control enMULT/updateSum/updateResult and update upperLeft in the last cycle
 	reg	 [3:0]			countMULTNext;
-    //reg                updateResult;
+    reg                 updateResult_; // delay
+
 	wire				updateSum; //As ... , we update sumResult .(Addend/AddResult 會一直變需要定義什麼時候才要update sum)
     wire 				updateResult; //As count = 10 , we let updateResult = 1;
 	// when high, assign convResultNext w/ reluResult
@@ -254,10 +255,11 @@ module CONV_SUB(
     wire [`DATAW-1 : 0] addResult1;
     wire [`DATAW-1 : 0] reluResult0;
     wire [`DATAW-1 : 0] reluResult1;
-    wire               resetSum;
+    wire                resetSum;
     // when high, assign sumResultNext w/ 0
 	wire 				enMULT;
 	wire 				doneMULT;
+
     //----------------------------- ASSIGNMENT -------------------------------//
 	//As both offset and countMULT are not 0 or offset is zero and countMULT is at least two , we set enMULT =1
 
@@ -267,7 +269,7 @@ module CONV_SUB(
 	assign updateResult = (offset==4'b1001 & countMULT == 4'b0010);//If updateResult = 1 , we update convResult w/ reluResult.
     assign resultK0 = convResult0;
     assign resultK1 = convResult1;
-    assign done = updateResult;
+    assign done = updateResult_;
     //done(updateResult) can only maintain high for 1 cycle and  must be in the previous cycle we leave
 	assign addResult0 = addend0 + sumResult0;
     assign addResult1 = addend1 + sumResult1;
@@ -487,6 +489,7 @@ module CONV_SUB(
             upperLeft <= upperLeftNext;
             offset <= offsetNext;
 			countMULT <= countMULTNext; // one more register , but it can do many thing !
+            updateResult_ <= updateResult;
         end
         else begin
             // RESET
@@ -495,6 +498,7 @@ module CONV_SUB(
 			countMULT <= 4'b0000;
             convResult0 <= 0;
             convResult1 <= 0;
+            updateResult_ <= 0;
         end
     end
 

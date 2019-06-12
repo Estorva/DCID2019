@@ -141,6 +141,9 @@ module  CONV(
     reg                 convEnNext;
     reg                 busyReg;
     reg                 busyRegNext;
+`ifdef EARLY_STOP
+    reg                 DEBUG; // used to halt the module early
+`endif
 
     wire [`DATAW-1 : 0] convResult0;
     wire [`DATAW-1 : 0] convResult1;
@@ -182,7 +185,11 @@ module  CONV(
 
     //----------------------------- ASSIGNMENT -------------------------------//
 
+`ifdef EARLY_STOP
+    assign busy = busyReg & DEBUG;
+`else
     assign busy = busyReg;
+`endif
     assign csel = cSel;
     assign cwr = (cSel != 3'b000);
     assign cdata_wr = cDataWr;
@@ -193,6 +200,14 @@ module  CONV(
     // mxplAddr = (convAddr.x / 2, convAddr.y / 2)
     assign waitDone = (convCount == 12'd0);
     // when count is 4095, wait for done of MXPL
+
+`ifdef EARLY_STOP
+    initial begin
+        DEBUG = 1;
+        #8000 // wait 8000 ns
+        DEBUG = 0;
+    end
+`endif
 
     //----------------------------- COMBINATIONAL ----------------------------//
 
@@ -232,10 +247,10 @@ module  CONV(
 
     always @(*) begin
         // The timing relationship of writing convolution result to memory:
-        // t+0 convDone is high
-        // t+1 convDone is low, cSel = 000, convResult0/1 and convAddr is updated
-        // t+2 cSel = 001, cWr = cwr = convResult0, caddr_wr
-        // t+3 cSel = 010, cwr = convResult1
+        // t+0 convDone is high, cSel = 000, convResult0/1 and convAddr is updated
+        //     cDataWr and cAddrWr is updated accordingly
+        // t+1 cSel = 001, update cdata_wr = convResult0, caddr_wr = convAddr
+        // t+2 cSel = 010, update cdata_wr = convResult1
 
         case (cSelNext)
             // Determine data to write depending on cSelNext
@@ -267,6 +282,8 @@ module  CONV(
         // If ready, set busy to 1
         // If MXPL is done after 4096 times of CONV, set busy to 0
         // Otherwise maintain state
+        // BAD!! COUNTER OCCUPIES AREA!!!
+        // use convEn and termination signal from CONV_SUB
         if (ready)                                    busyRegNext = 1;
         else if (waitDone & cSel == 3'b101 & mxplSel) busyRegNext = 0;
         else                                          busyRegNext = busyReg;

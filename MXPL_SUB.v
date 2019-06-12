@@ -23,8 +23,8 @@ module MXPL_SUB(clk, reset, data, convDone, result, mxplDone);
     reg                        done_;
     reg                        done__;
     // delay the done signal two cycles
-    reg         [1:0]         count;
-    reg         [1:0]         countNext;
+    reg         [1:0]          count;
+    reg         [1:0]          countNext;
 
 
     wire signed [`DATAW-1 : 0] BNext;
@@ -35,7 +35,7 @@ module MXPL_SUB(clk, reset, data, convDone, result, mxplDone);
 
     assign result = compResult;
     assign mxplDone = done__;
-    assign BNext = (count == 2'b00 ? data : compResult);
+    assign BNext = (count == 2'b01 ? data : compResult);
     assign compResult = (A > B ? A : B); // declare A and B to be signed for this operation
 
     //----------------------------- COMBINATIONAL ----------------------------//
