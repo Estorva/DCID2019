@@ -1,0 +1,132 @@
+Information: Updating design information... (UID-85)
+ 
+****************************************
+Report : timing
+        -path full
+        -delay max
+        -max_paths 1
+Design : CONV
+Version: N-2017.09-SP2
+Date   : Thu Jun 20 16:49:07 2019
+****************************************
+
+Operating Conditions: slow   Library: slow
+Wire Load Model Mode: top
+
+  Startpoint: conv0/countMULT_reg[3]
+              (rising edge-triggered flip-flop clocked by clk)
+  Endpoint: conv0/mult0/Ans_reg[36]
+            (rising edge-triggered flip-flop clocked by clk)
+  Path Group: clk
+  Path Type: max
+
+  Des/Clust/Port     Wire Load Model       Library
+  ------------------------------------------------
+  CONV               tsmc13_wl10           slow
+
+  Point                                                   Incr       Path
+  --------------------------------------------------------------------------
+  clock clk (rise edge)                                   0.00       0.00
+  clock network delay (ideal)                             0.50       0.50
+  conv0/countMULT_reg[3]/CK (DFFTRX4)                     0.00       0.50 r
+  conv0/countMULT_reg[3]/QN (DFFTRX4)                     0.20       0.70 r
+  conv0/U29/Y (BUFX20)                                    0.09       0.79 r
+  conv0/U26/Y (NAND2X6)                                   0.05       0.84 f
+  conv0/U112/Y (NAND3BX4)                                 0.10       0.94 f
+  conv0/U136/Y (OAI211X2)                                 0.11       1.05 r
+  conv0/U19/Y (CLKINVX4)                                  0.08       1.12 f
+  conv0/U209/Y (OAI211X4)                                 0.19       1.31 r
+  conv0/U83/Y (BUFX20)                                    0.08       1.39 r
+  conv0/U39/Y (AND4X6)                                    0.11       1.50 r
+  conv0/U78/Y (NAND3X8)                                   0.10       1.60 f
+  conv0/U36/Y (NAND3X6)                                   0.11       1.71 r
+  conv0/mult0/B[1] (MULT_1)                               0.00       1.71 r
+  conv0/mult0/U20/Y (INVX8)                               0.05       1.76 f
+  conv0/mult0/add_49/A[1] (MULT_1_DW01_inc_4)             0.00       1.76 f
+  conv0/mult0/add_49/U1_1_1/CO (ADDHX4)                   0.11       1.87 f
+  conv0/mult0/add_49/U1_1_2/CO (ADDHX4)                   0.10       1.97 f
+  conv0/mult0/add_49/U4/Y (AND2X4)                        0.11       2.08 f
+  conv0/mult0/add_49/U3/Y (CLKAND2X12)                    0.08       2.16 f
+  conv0/mult0/add_49/U1_1_5/CO (ADDHX4)                   0.10       2.26 f
+  conv0/mult0/add_49/U1_1_6/CO (ADDHX4)                   0.10       2.36 f
+  conv0/mult0/add_49/U1_1_7/CO (ADDHX4)                   0.11       2.47 f
+  conv0/mult0/add_49/U5/Y (AND2X6)                        0.10       2.57 f
+  conv0/mult0/add_49/U1_1_9/CO (ADDHX4)                   0.10       2.67 f
+  conv0/mult0/add_49/U1_1_10/CO (ADDHX4)                  0.10       2.78 f
+  conv0/mult0/add_49/U1_1_11/CO (ADDHX4)                  0.10       2.88 f
+  conv0/mult0/add_49/U1_1_12/CO (ADDHX4)                  0.10       2.98 f
+  conv0/mult0/add_49/U1_1_13/CO (ADDHX4)                  0.10       3.08 f
+  conv0/mult0/add_49/U1_1_14/CO (ADDHX4)                  0.10       3.19 f
+  conv0/mult0/add_49/U1_1_15/CO (ADDHX4)                  0.10       3.29 f
+  conv0/mult0/add_49/U1_1_16/CO (ADDHX4)                  0.10       3.39 f
+  conv0/mult0/add_49/U1_1_17/CO (ADDHX4)                  0.10       3.49 f
+  conv0/mult0/add_49/U2/Y (XOR2X4)                        0.07       3.56 f
+  conv0/mult0/add_49/SUM[18] (MULT_1_DW01_inc_4)          0.00       3.56 f
+  conv0/mult0/U175/Y (OAI2BB2X4)                          0.14       3.70 f
+  conv0/mult0/U191/Y (AOI22X4)                            0.13       3.84 r
+  conv0/mult0/U174/Y (OAI22X4)                            0.09       3.93 f
+  conv0/mult0/U263/Y (AOI2BB2X4)                          0.11       4.04 r
+  conv0/mult0/U28/Y (OAI2BB2X4)                           0.07       4.11 f
+  conv0/mult0/U45/Y (CLKAND2X12)                          0.10       4.21 f
+  conv0/mult0/U44/Y (NOR3X8)                              0.12       4.33 r
+  conv0/mult0/U5/Y (INVX16)                               0.07       4.40 f
+  conv0/mult0/U136/Y (NAND2X8)                            0.07       4.47 r
+  conv0/mult0/U26/Y (OAI21X4)                             0.06       4.53 f
+  conv0/mult0/U692/Y (CLKAND2X12)                         0.08       4.61 f
+  conv0/mult0/U691/Y (NOR2BX4)                            0.10       4.71 f
+  conv0/mult0/U245/Y (BUFX20)                             0.10       4.81 f
+  conv0/mult0/U177/Y (NAND2X2)                            0.08       4.89 r
+  conv0/mult0/U176/Y (OAI211X2)                           0.10       4.99 f
+  conv0/mult0/U33/Y (BUFX16)                              0.13       5.12 f
+  conv0/mult0/add_91/B[9] (MULT_1_DW01_add_5)             0.00       5.12 f
+  conv0/mult0/add_91/U1_9/CO (ADDFX1)                     0.28       5.39 f
+  conv0/mult0/add_91/U1_10/CO (ADDFHX2)                   0.16       5.55 f
+  conv0/mult0/add_91/U1_11/CO (ADDFX1)                    0.21       5.76 f
+  conv0/mult0/add_91/U1_12/CO (CMPR32X2)                  0.22       5.99 f
+  conv0/mult0/add_91/U1_13/CO (ADDFXL)                    0.30       6.28 f
+  conv0/mult0/add_91/U1_14/CO (ADDFXL)                    0.32       6.60 f
+  conv0/mult0/add_91/U1_15/CO (ADDFHX2)                   0.17       6.77 f
+  conv0/mult0/add_91/U1_16/CO (ADDFXL)                    0.29       7.06 f
+  conv0/mult0/add_91/U1_17/CO (ADDFHX2)                   0.18       7.25 f
+  conv0/mult0/add_91/U1_18/CO (ADDFHX4)                   0.13       7.38 f
+  conv0/mult0/add_91/U1_19/CO (ADDFHX4)                   0.13       7.51 f
+  conv0/mult0/add_91/U1_20/CO (ADDFHX4)                   0.13       7.64 f
+  conv0/mult0/add_91/U1_21/CO (ADDFHX4)                   0.12       7.76 f
+  conv0/mult0/add_91/U1_22/CO (ADDFX2)                    0.21       7.97 f
+  conv0/mult0/add_91/U1_23/CO (ADDFX2)                    0.24       8.20 f
+  conv0/mult0/add_91/U1_24/CO (ADDFHX4)                   0.14       8.35 f
+  conv0/mult0/add_91/U1_25/CO (ADDFHX4)                   0.12       8.47 f
+  conv0/mult0/add_91/U1_26/CO (ADDFHX2)                   0.15       8.62 f
+  conv0/mult0/add_91/U1_27/CO (ADDFHX4)                   0.13       8.75 f
+  conv0/mult0/add_91/U1_28/CO (ADDFHX4)                   0.14       8.89 f
+  conv0/mult0/add_91/U2/Y (OR2X8)                         0.11       9.01 f
+  conv0/mult0/add_91/U6/Y (CLKAND2X12)                    0.08       9.09 f
+  conv0/mult0/add_91/U5/Y (CLKAND2X3)                     0.13       9.22 f
+  conv0/mult0/add_91/U10/Y (AND2X4)                       0.12       9.34 f
+  conv0/mult0/add_91/U11/Y (AND2X4)                       0.12       9.46 f
+  conv0/mult0/add_91/U8/Y (CLKAND2X12)                    0.09       9.55 f
+  conv0/mult0/add_91/U7/Y (CLKAND2X12)                    0.08       9.62 f
+  conv0/mult0/add_91/U9/Y (XOR2X2)                        0.10       9.73 f
+  conv0/mult0/add_91/SUM[36] (MULT_1_DW01_add_5)          0.00       9.73 f
+  conv0/mult0/U142/Y (CLKAND2X3)                          0.12       9.85 f
+  conv0/mult0/U96/Y (OR2X4)                               0.13       9.98 f
+  conv0/mult0/U141/Y (NOR2X8)                             0.06      10.04 r
+  conv0/mult0/U163/Y (NAND3X4)                            0.06      10.09 f
+  conv0/mult0/U264/Y (AO22X4)                             0.15      10.24 f
+  conv0/mult0/Ans_reg[36]/D (DFFQX1)                      0.00      10.24 f
+  data arrival time                                                 10.24
+
+  clock clk (rise edge)                                  10.00      10.00
+  clock network delay (ideal)                             0.50      10.50
+  clock uncertainty                                      -0.10      10.40
+  conv0/mult0/Ans_reg[36]/CK (DFFQX1)                     0.00      10.40 r
+  library setup time                                     -0.15      10.25
+  data required time                                                10.25
+  --------------------------------------------------------------------------
+  data required time                                                10.25
+  data arrival time                                                -10.24
+  --------------------------------------------------------------------------
+  slack (MET)                                                        0.00
+
+
+1
