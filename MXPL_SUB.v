@@ -6,6 +6,24 @@
 `endif
 
 module MXPL_SUB(clk, reset, data, convDone, result, mxplDone);
+    /*-------------------------------- SPEC ----------------------------------//
+        Synopsis
+            This module stores the results of convolution and compares the
+            results. Output mxplDone is high for one cycle after 4 resulst are
+            gathered (with some delay).
+
+        Reg "A"
+            Stores the results of convolution as a basis of comparison.
+
+        Reg "B"
+            Stores the results of comparison. When "count" is 00, B stores the
+            same value as A. Later it stores the output of comparison (>).
+
+        Reg "count"
+            11 after reset and start waiting for convDone high signals. Outputs
+            mxplDone when reaching 11 and gathering 4 data points.
+
+    //-------------------------------- SPEC ----------------------------------*/
 
     //----------------------------- I/O PORTS --------------------------------//
 
@@ -18,7 +36,7 @@ module MXPL_SUB(clk, reset, data, convDone, result, mxplDone);
 
     //----------------------------- VARIABLES --------------------------------//
 
-    reg  signed [`DATAW-1 : 0] A; // the operand that is always the output of convolution
+    reg  signed [`DATAW-1 : 0] A;
     reg  signed [`DATAW-1 : 0] B;
     reg                        done_;
     reg                        done__;
@@ -27,15 +45,17 @@ module MXPL_SUB(clk, reset, data, convDone, result, mxplDone);
     reg         [1:0]          countNext;
 
 
+    wire signed [`DATAW-1 : 0] ANext;
     wire signed [`DATAW-1 : 0] BNext;
     wire signed [`DATAW-1 : 0] compResult;
 
 
     //----------------------------- ASSIGNMENT -------------------------------//
 
-    assign result = compResult;
+    assign result = B;
     assign mxplDone = done__;
-    assign BNext = (count == 2'b01 ? data : compResult);
+    assign ANext = (convDone ? data : A);
+    assign BNext = ((count == 2'b11 & convDone) ? data : compResult);
     assign compResult = (A > B ? A : B); // declare A and B to be signed for this operation
 
     //----------------------------- COMBINATIONAL ----------------------------//
@@ -50,13 +70,13 @@ module MXPL_SUB(clk, reset, data, convDone, result, mxplDone);
     always @(posedge clk) begin
         if (!reset) begin
             count <= countNext;
-            A <= data;
+            A <= ANext;
             B <= BNext;
             done__ <= done_;
-            done_ <= (countNext == 2'b00) & (count == 2'b11);
+            done_ <= (countNext == 2'b11) & (count == 2'b10);
         end
         else begin
-            count <= 0;
+            count <= 2'b11;
             A <= 0;
             B <= 0;
             done_ <= 0;

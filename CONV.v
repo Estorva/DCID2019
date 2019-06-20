@@ -133,14 +133,9 @@ module  CONV(
     // 0 when write mxpl0 to mem; lasts for 2 cycles, one for layer 1, the other
     // for layer 2 (flattening)
     reg                 mxplSelNext;
-    reg  [11:0]         convCount;
-    // +1 when conv is done
-    reg  [11:0]         convCountNext;
-    reg                 convEn;
-    // a flag that controls when the CONV_SUB works
-    reg                 convEnNext;
-    reg                 busyReg;
-    reg                 busyRegNext;
+    reg  [1:0]          state;
+    reg  [1:0]          stateNext;
+    // 00: after reset, idle; 10: busy; 11: wait done
 `ifdef EARLY_STOP
     reg                 DEBUG; // used to halt the module early
 `endif
@@ -149,12 +144,18 @@ module  CONV(
     wire [`DATAW-1 : 0] convResult1;
     wire [`ADDRW-1 : 0] convAddr;
     wire                convDone;
+    wire                convEn;
+    // a flag that controls when the CONV_SUB works
+    wire                convTerm;
+    // becomes 1 after 4096 operations
     wire [`DATAW-1 : 0] mxplResult0;
     wire [`DATAW-1 : 0] mxplResult1;
     wire [`ADDRW-1 : 0] mxplAddr;
+    wire [`ADDRW-1 : 0] flatAddr;
     wire                mxplDone0;
     wire                mxplDone1;
-    wire                waitDone;
+    // After CONV_SUB module sends a termination signal, wait for the flattening
+    // process to end to pull busy to 0
 
     //----------------------------- SUBMODULES -------------------------------//
 
@@ -166,7 +167,8 @@ module  CONV(
                     .addrWr(convAddr),
                     .resultK0(convResult0),
                     .resultK1(convResult1),
-                    .done(convDone)
+                    .done(convDone),
+                    .term(convTerm)
     );
     MXPL_SUB mxpl0 (.clk(clk),
                     .reset(reset),
@@ -186,9 +188,9 @@ module  CONV(
     //----------------------------- ASSIGNMENT -------------------------------//
 
 `ifdef EARLY_STOP
-    assign busy = busyReg & DEBUG;
+    assign busy = state[1] & DEBUG;
 `else
-    assign busy = busyReg;
+    assign busy = state[1];
 `endif
     assign csel = cSel;
     assign cwr = (cSel != 3'b000);
@@ -196,10 +198,11 @@ module  CONV(
     assign caddr_wr = cAddrWr;
     assign crd = 0;
 
-    assign mxplAddr = {convAddr[`ADDRW-1 : `ADDRW/2 + 1], convAddr[`ADDRW/2 : 1]};
+    assign convEn = (state == 2'b10);
+    assign mxplAddr = {2'b00, convAddr[`ADDRW-1 : `ADDRW/2 + 1], convAddr[`ADDRW/2-1 : 1]};
     // mxplAddr = (convAddr.x / 2, convAddr.y / 2)
-    assign waitDone = (convCount == 12'd0);
-    // when count is 4095, wait for done of MXPL
+    assign flatAddr = {mxplAddr[`ADDRW-2 : 0], mxplSel};
+    // flatAddr = mxplAddr * 2 + mxplSel
 
 `ifdef EARLY_STOP
     initial begin
@@ -236,9 +239,6 @@ module  CONV(
             endcase
         end
 
-        if (convDone) convCountNext = convCount + 1;
-        else          convCountNext = convCount;
-
         if (mxplDone0)           mxplSelNext = 0;
         else if (cSel == 3'b101) mxplSelNext = ~mxplSel; // 0 -> 1, 1 -> 0
         else if (cSel != 3'b000) mxplSelNext = mxplSel;  // hold value
@@ -263,30 +263,20 @@ module  CONV(
         endcase
 
         if (cSel == 3'b000 || cSel == 3'b001)      cAddrWrNext = convAddr;
-        else if (cSel == 3'b010 || cSel == 3'b011) cAddrWrNext = mxplAddr;
+        else if (cSel == 3'b010 || cSel == 3'b101) cAddrWrNext = mxplAddr;
+        else if (cSel == 3'b011 || cSel == 3'b100) cAddrWrNext = flatAddr;
         else                                       cAddrWrNext = 0;
     end
 
     always @(*) begin
-        // Handle convEn
-        // When ready is 1, set busy and convEn to 1 at next cycle
-        // When busy is 1, testfixture senses and set ready back to 0
-        // Turn CONV_SUB off when it has output results 64 times
-        if (ready)                      convEnNext = 1;
-        else if (convCount == 12'd4095) convEnNext = 0;
-        else                            convEnNext = convEn;
-    end
-
-    always @(*) begin
-        // Handle busy state
-        // If ready, set busy to 1
-        // If MXPL is done after 4096 times of CONV, set busy to 0
-        // Otherwise maintain state
-        // BAD!! COUNTER OCCUPIES AREA!!!
-        // use convEn and termination signal from CONV_SUB
-        if (ready)                                    busyRegNext = 1;
-        else if (waitDone & cSel == 3'b101 & mxplSel) busyRegNext = 0;
-        else                                          busyRegNext = busyReg;
+        // Handle state
+        // 00: after reset, wait for ready signal
+        // 10: after ready is 1, read image and produce result
+        // 11: after conv sends a term signal, wait for last round of flattening
+        if (ready)                         stateNext = 2'b10;
+        else if (convTerm)                 stateNext = 2'b11;
+        else if (state == 2'b11 & mxplSel & cSel == 3'b101) stateNext = 2'b00;
+        else                               stateNext = state;
     end
 
     //----------------------------- SEQUENTIAL -------------------------------//
@@ -298,18 +288,14 @@ module  CONV(
             cDataWr <= cDataWrNext;
             cAddrWr <= cAddrWrNext;
             mxplSel <= mxplSelNext;
-            convCount <= convCountNext;
-            convEn <= convEnNext;
-            busyReg <= busyRegNext;
+            state <= stateNext;
         end
         else begin
             cSel <= 0;
             cDataWr <= 0;
             cAddrWr <= 0;
             mxplSel <= 0;
-            convCount <= 0;
-            convEn <= 0;
-            busyReg <= 0;
+            state <= 0;
         end
     end
 
