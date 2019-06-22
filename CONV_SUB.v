@@ -5,16 +5,58 @@
 // width of address
 `endif
 
+module PPG(
+    	input  [`DATAW-2:0] Mc, //19-bit Multiplicand (textbook Y) (A)
+    	input  [4:0]        Mp, //19-bit Multiplier (textbook X) (B)
+    	input               phase,
+    	output [`DATAW-1:0] PP
+	);
 
-module MULT(
-    //Because we have to add 8 times by booth encoding method , we must cut pipeline
-    input              clk,
-	input              reset,
+    /*-------------------------------- SPEC ----------------------------------//
+        PPG (Partial Product Generator): generates necessary partial product
+            according to some external parameters
+
+        Input:
+            Mc: multiplicand, the (signed) number we will shift and revert sign
+            Mp: multiplier, groups of bits used for booth encoding
+                Usually general-purpose multiplier shifts a window on the
+                operand to decide the result of PP; here we allocate 5 PPG's,
+                considering that the operand is 20 bits wide (10 groups),
+                each PPG receives 2 groups (6 bits) and decides to take upper
+                or lower half depending on the external state of multiplier.
+            phase: the multiplication is seperated into two phases. In phase 1,
+                PPG's generate PP using lower half of Mp. In phase 2, upper one.
+    //------------------------------------------------------------------------*/
+
+	reg  [`DATAW-1:0] PP_reg;
+    wire [2:0]        bitGroup;
+
+	assign bitGroup = (phase ? Mp[4:2] : Mp[2:0]);
+    assign PP = PP_reg;
+
+	always@(*) begin
+		case (bitGroup)
+			3'b000:  PP_reg = 0;
+			3'b001:  PP_reg = Mc;
+			3'b010:  PP_reg = Mc;
+			3'b011:  PP_reg = Mc << 1;
+			3'b100:	 PP_reg = ~(Mc << 1) + 1;
+			3'b101:  PP_reg = ~Mc + 1;
+			3'b110:  PP_reg = ~Mc + 1;
+			3'b111:	 PP_reg = 0;
+			default: PP_reg = 0;
+		endcase
+	end
+endmodule
+
+module MULT(//Because we have to add 8 times by booth encoding method , we must cut pipeline
+    input clk,
+	input reset,
 	input [`DATAW-1:0] A, //input cData
     input [`DATAW-1:0] B, //input k0
-	input              enMULT, //If enMULT = 1 , we update count in MULT
-    output             [35:0] Y,
-	output             doneMULT //doneMULT = 1 can only maintain one cycle and must be in the previous cycle we leave.
+	input enMULT, 		//If enMULT = 1 , we start count function
+    output [35:0] Y,
+	output doneMULT // for updating offset
     );
 
     /*-------------------------------- SPEC ----------------------------------//
@@ -26,38 +68,84 @@ module MULT(
         the radix point.
     //------------------------------------------------------------------------*/
 
-	reg  [`DATAW-1:0]     PP; //20-bit Partial product
-	reg  [2*(`DATAW-2):0] Ans; //37-bit Correct Answer
-	reg  [2*(`DATAW-2):0] AnsNext;
-	reg  [34:0]           AnsCorrect;
-	reg  [35:0]           AnsCorrect_update;
-	reg  [2:0]            inputs; // inputs : x_2i+1 x_2i x_2i-1 8 possibility
-	reg  [3:0]            count; //from 0 to 8 , PP0 -> PP8
-	reg  [3:0]            countNext;
-	reg                   signCorrect ; //the sign of final result
-	reg                   signCorrectNext;
-	reg                   sign;// For PP
-
-    wire [`DATAW-2:0]     Mc; //19-bit Multiplicand (textbook Y) (A)
-    wire [`DATAW-2:0]     Mp; //19-bit Multiplier (textbook X) (B)
-    wire                  signA;
-	wire                  signB;
+	wire [`DATAW-2:0] Mc; //19-bit Multiplicand (textbook Y) (A)
+	wire [`DATAW-2:0] Mp; //19-bit Multiplier (textbook X) (B)
+	reg [`DATAW-1:0] PP0; //20-bit Partial product
+	wire [`DATAW-1:0] PP0Next;
+	reg [`DATAW-1:0] PP1;
+	wire [`DATAW-1:0] PP1Next;
+	reg [`DATAW-1:0] PP2;
+	wire [`DATAW-1:0] PP2Next;
+	reg [`DATAW-1:0] PP3;
+	wire [`DATAW-1:0] PP3Next;
+	reg [`DATAW-1:0] PP4;
+	wire [`DATAW-1:0] PP4Next;
+	reg [3:0] countPP0;
+	reg [3:0] countPP1;
+	reg [3:0] countPP2;
+	reg [3:0] countPP3;
+	reg [3:0] countPP4;
+	reg signPP0;
+	reg signPP1;
+	reg signPP2;
+	reg signPP3;
+	reg signPP4;
+	reg [2*(`DATAW-2):0] Ans; //37-bit Correct Answer
+	reg [2*(`DATAW-2):0] AnsNext;
+	reg [34:0] AnsCorrect;
+	reg [35:0] AnsCorrect_update;
+	reg count; // 0 or 1
+	reg countNext;
+	wire signA ;
+	wire signB ;
+	reg signCorrect ; //the sign of final result
+	reg signCorrectNext;
 
 	assign signA = A[`DATAW-1];
 	assign signB = B[`DATAW-1];
 	assign Mc = ({`DATAW-1{signA}} & (~A[`DATAW-2:0]+18'd1)) | ({`DATAW-1{~signA}} & A[`DATAW-2:0]);
 	assign Mp = ({`DATAW-1{signB}} & (~B[`DATAW-2:0]+18'd1)) | ({`DATAW-1{~signB}} & B[`DATAW-2:0]);
 	assign Y = AnsCorrect_update;
-	assign doneMULT = (count == 4'b0111); //if doneMULT = 1 , we update offset
+	assign doneMULT = (count == 1'b0 & enMULT); //if doneMULT = 1 , we update offset
 
-	///combinational
-	always @(*) begin //update signCoreect
-		if (count == 4'b0001)
+	//----------------------------- SUBMODULES -------------------------------//
+
+	PPG ppg0(.Mc(Mc),
+			 .Mp({Mp[3:0], 1'b0}),
+			 .phase(count),
+			 .PP(PP0Next)
+			);
+	PPG ppg1(.Mc(Mc),
+			 .Mp(Mp[7:3]),
+			 .phase(count),
+			 .PP(PP1Next)
+			);
+	PPG ppg2(.Mc(Mc),
+			 .Mp(Mp[11:7]),
+			 .phase(count),
+			 .PP(PP2Next)
+			);
+	PPG ppg3(.Mc(Mc),
+			 .Mp(Mp[15:11]),
+			 .phase(count),
+			 .PP(PP3Next)
+			);
+	PPG ppg4(.Mc(Mc),
+			 .Mp({1'b0, Mp[18:15]}),
+			 .phase(count),
+			 .PP(PP4Next)
+			);
+
+    //----------------------------- COMBINATIONAL ----------------------------//
+
+	always @(*) begin //update signCorrect
+		if (count == 1'b1)
 			signCorrectNext = signA^signB;
 		else
 			signCorrectNext = signCorrect;
 	end
-	always @(*) begin
+
+	always @(*) begin // get right Answer
 		AnsCorrect = Ans[34:0];
 		if( AnsCorrect == 35'd0 )
 			AnsCorrect_update = 36'd0;
@@ -66,59 +154,60 @@ module MULT(
 	end
 
 	always @(*) begin
-		if(count == 4'b0000 ) inputs = { Mp[1:0] , 1'b0};
-		else if (count == 4'b1001) inputs = { 1'b0 , Mp[`DATAW-2:`DATAW-3] };
-		else inputs = Mp[((count<<1)+1)-:3];
-		//inputs determined by Multiplier Mp ( textbook X ) and count
-		case (inputs)
-			3'b000: PP = 0;
-			3'b001: PP = Mc;
-			3'b010: PP = Mc;
-			3'b011: PP = Mc << 1;
-			3'b100:	PP = ~(Mc << 1) + 1;
-			3'b101: PP = ~Mc + 1;
-			3'b110: PP = ~Mc + 1;
-			3'b111:	PP = 0;
-			default: PP = 0;
-		endcase
-		sign = PP[`DATAW-1];
-
+		//calculate AnsNext
+		signPP0 = PP0[`DATAW-1];
+		signPP1 = PP1[`DATAW-1];
+		signPP2 = PP2[`DATAW-1];
+		signPP3 = PP3[`DATAW-1];
+		signPP4 = PP4[`DATAW-1];
 		case (count)
-			4'b0000: AnsNext = {~sign,{2{sign}},PP};
-			4'b0001: AnsNext = Ans + ({1'b1,~sign,PP} << 2);
-			4'b0010: AnsNext = Ans + ({1'b1,~sign,PP} << 4);
-			4'b0011: AnsNext = Ans + ({1'b1,~sign,PP} << 6);
-			4'b0100: AnsNext = Ans + ({1'b1,~sign,PP} << 8);
-			4'b0101: AnsNext = Ans + ({1'b1,~sign,PP} << 10);
-			4'b0110: AnsNext = Ans + ({1'b1,~sign,PP} << 12);
-			4'b0111: AnsNext = Ans + ({1'b1,~sign,PP} << 14);
-			4'b1000: AnsNext = Ans + ({~sign,PP} << 16);
-			4'b1001: AnsNext = Ans + (PP[`DATAW-2:0]<< 18);
+            1'b1: begin
+                AnsNext = {~signPP0, {2{signPP0}}, PP0}
+                    + ({1'b1, ~signPP1, PP1} << 4)
+                    + ({1'b1, ~signPP2, PP2} << 8)
+                    + ({1'b1, ~signPP3, PP3} << 12)
+                    + ({1'b1, ~signPP4, PP4} << 16);
+                end
+            1'b0: begin
+                AnsNext = Ans + ({1'b1, ~signPP0, PP0} << 2)
+                    + ({1'b1, ~signPP1, PP1} << 6)
+                    + ({1'b1, ~signPP2, PP2} << 10)
+                    + ({1'b1, ~signPP3, PP3} << 14)
+                    + ({1'b1, ~signPP4, PP4} << 18);
+                end
 			default: AnsNext = Ans;
 		endcase
 	end
-	always @(*) begin
+
+    always @(*) begin
 		//Update count
-		if( enMULT  ) begin
-			countNext = count + 1;
-		end
-		else begin
-			countNext = 4'b0000;
-		end
+		if (count)        countNext = 1'b0;
+		else if (enMULT)  countNext = count + 1;
+		else              countNext = 1'b0;
 	end
 
-	///sequential
+	//------------------------------ SEQUENTIAL ------------------------------//
     always @(posedge clk) begin
         if (!reset) begin
 			Ans <= AnsNext;
 			count <= countNext;
 			signCorrect <= signCorrectNext;
+			PP0 <= PP0Next;
+			PP1 <= PP1Next;
+			PP2 <= PP2Next;
+			PP3 <= PP3Next;
+			PP4 <= PP4Next;
 		end
 		else begin
 		//RESET
 			Ans <= 0;
 			count <= 0;
 			signCorrect <= 0;
+			PP0 <= 0;
+			PP1 <= 0;
+			PP2 <= 0;
+			PP3 <= 0;
+			PP4 <= 0;
 		end
 	end
 endmodule
@@ -147,7 +236,7 @@ module CONV_SUB(
     output [`DATAW-1 : 0] resultK0,
     output [`DATAW-1 : 0] resultK1,
     output                done,
-    output                term
+	output                term
 	);
     //----------------------------- PARAMETERS -------------------------------//
 
@@ -203,11 +292,10 @@ module CONV_SUB(
     reg  [3:0]          offsetNext;
 	reg  [`ADDRW/2-1:0] Q; //Quotient from 0 to 2
 	reg  [`ADDRW/2-1:0] R; //Remainder from 0 to 2
-	reg  [6:0]			countMULT;//Control resetSum/updateSum/updateResult/done/enMULT/upperLeft/addrWr
-	reg	 [6:0]			countMULTNext;
+	reg  [4:0]			countMULT;//Control resetSum/updateSum/updateResult/done/enMULT/upperLeft/addrWr
+	reg	 [4:0]			countMULTNext;
 	reg  				enMULT_reg; //For enMULT
     reg                 updateSum_reg;//For updateSum
-
 	wire				updateSum;
 	wire 				updateResult;
     wire [35 : 0]       multResult0;
@@ -222,20 +310,20 @@ module CONV_SUB(
 	wire 				doneMULT;
 
     //----------------------------- ASSIGNMENT -------------------------------//
+
 	assign enMULT = enMULT_reg;
-	assign resetSum = (countMULT == 7'd95);
+	assign resetSum = (countMULT == 5'd24);
 	assign updateSum =  updateSum_reg;//If updateSum = 1 , we plus addend to sumResult.
-	assign updateResult = (countMULT == 7'd94);//If updateResult = 1 , we update convResult w/ reluResult.
+	assign updateResult = (countMULT == 5'd24);//If updateResult = 1 , we update convResult w/ reluResult.
     assign resultK0 = convResult0;
     assign resultK1 = convResult1;
-    assign done = (countMULT == 7'd95);//when convResult is ready , we pull up done.
+    assign done = (countMULT == 5'd25);//when convResult is ready , we pull up done.
     //done can only maintain high for 1 cycle
 	assign addResult0 = addend0 + sumResult0;
     assign addResult1 = addend1 + sumResult1;
 	assign addrWr = {(upperLeft_org[`ADDRW-1:`ADDRW/2] + 6'b000001),(upperLeft_org[`ADDRW/2-1:0] + 6'b000001)};
 	assign addrRd = {upperLeft[`ADDRW-1:`ADDRW/2] + Q , upperLeft[`ADDRW/2-1:0] + R};
-    assign term = done & (upperLeft == 12'hFFF);
-    // when upperLeft done at (62, 62) and jumps to (-1, -1), the convolution process terminates
+	assign term = done & (upperLeft == 12'hFFF);
 
     //----------------------------- SUBMODULES -------------------------------//
 
@@ -265,6 +353,7 @@ module CONV_SUB(
     );
 
     //----------------------------- COMBINATIONAL ----------------------------//
+
 	always @(*) begin
 		//upperLeft_org for addrWr
 		if(upperLeft[`ADDRW/2] & ~upperLeft[0]) //Y = odd , X = even
@@ -296,27 +385,39 @@ module CONV_SUB(
 
 	always @(*) begin
 		//updateSum_reg for updateSum
-		if(countMULT == 7'd13 | countMULT == 7'd23 |countMULT == 7'd33 | countMULT == 7'd43
-		 | countMULT == 7'd53 | countMULT == 7'd63 |countMULT == 7'd73 | countMULT == 7'd83 | countMULT == 7'd93)
+		if(countMULT == 5'd7 | countMULT == 5'd9 |countMULT == 5'd11 | countMULT == 5'd13
+		 | countMULT == 5'd15 | countMULT == 5'd17 |countMULT == 5'd19 | countMULT == 5'd21
+		 | countMULT == 5'd23 | countMULT == 5'd25)
 			updateSum_reg = 1;
 		else updateSum_reg = 0;
 	end
 
 	always @(*) begin
-		//enMULT_reg for enMULT
-		if(countMULT == 7'd0 | countMULT == 7'd1 |countMULT == 7'd11 | countMULT == 7'd21
-		 | countMULT == 7'd31| countMULT == 7'd41|countMULT == 7'd51 | countMULT == 7'd61
-		 | countMULT == 7'd71| countMULT == 7'd81|countMULT == 7'd91)
-			enMULT_reg = 0;
+		if((countMULT == 5'd0)|(countMULT == 5'd1) | (countMULT == 5'd2)) enMULT_reg = 0;
 		else enMULT_reg = 1;
 	end
 	always @(*) begin
-
-		if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0001 | offset == 4'b0010)) cDataNext = 0;
-		else if(upperLeft[`ADDRW/2-1:0] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0011 | offset == 4'b0110)) cDataNext = 0;
-		else if(upperLeft[`ADDRW/2-1:0] == 6'b111110 & (offset == 4'b0010 | offset == 4'b0101 | offset == 4'b1000)) cDataNext = 0;
-		else if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111110 & (offset == 4'b0110 | offset == 4'b0111 | offset == 4'b1000)) cDataNext = 0;
-		else cDataNext = iData;
+		if(offset == 4'b1000 & doneMULT) offsetNext = 4'b0000;
+		else if(doneMULT) offsetNext = offset + 4'b0001;
+		else offsetNext = offset;
+	end
+	always @(*) begin
+		//have to take care cDataNext from iData
+		//upperLeft and offset update early
+		if((countMULT == 5'd19 ) )begin
+			if(upperLeft_org[`ADDRW-1:`ADDRW/2] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0001 | offset == 4'b0010)) cDataNext = 0;
+			else if(upperLeft_org[`ADDRW/2-1:0] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0011 | offset == 4'b0110)) cDataNext = 0;
+			else if(upperLeft_org[`ADDRW/2-1:0] == 6'b111110 & (offset == 4'b0010 | offset == 4'b0101 | offset == 4'b1000)) cDataNext = 0;
+			else if(upperLeft_org[`ADDRW-1:`ADDRW/2] == 6'b111110 & (offset == 4'b0110 | offset == 4'b0111 | offset == 4'b1000)) cDataNext = 0;
+			else cDataNext = iData;
+		end
+		else begin
+			if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111111 & (offset == 4'b0000| offset== 4'b0001| offset == 4'b0010)) cDataNext = 0;
+			else if(upperLeft[`ADDRW/2-1:0] == 6'b111111 & (offset == 4'b0000 | offset == 4'b0011 | offset == 4'b0110)) cDataNext = 0;
+			else if(upperLeft[`ADDRW/2-1:0] == 6'b111110 & (offset == 4'b0010 | offset == 4'b0101 | offset == 4'b1000)) cDataNext = 0;
+			else if(upperLeft[`ADDRW-1:`ADDRW/2] == 6'b111110 & (offset == 4'b0110 | offset == 4'b0111 | offset == 4'b1000)) cDataNext = 0;
+			else cDataNext = iData;
+		end
 
 		//resetSum and updateSum will not happen at the same time
 		if(resetSum)  begin
@@ -344,7 +445,7 @@ module CONV_SUB(
 
     always @(*) begin
 		//deal with addrRd w/ Quotient Q and Remainder R
-        case (offset)
+        case (offsetNext)
             4'b0000: begin
 				Q = 6'b000000;
 				R = 6'b000000;
@@ -387,39 +488,44 @@ module CONV_SUB(
 			end
         endcase
     end
+
 	always @(*) begin
-	    // handle kernel k0 and k1 w/ countMULT
-		if((countMULT >= 7'd12) & (countMULT <7'd22) )begin
+	    // handle kernel k0 and k1 w/ offsetNext
+		if (offsetNext == 4'b0000) begin
+			k0 = k08;
+			k1 = k18;
+		end
+		else if( offsetNext == 4'b0001 )begin
+			k0 = k00;
+			k1 = k10;
+		end
+		else if(offsetNext == 4'b0010 )begin
 			k0 = k01;
 			k1 = k11;
 		end
-		else if((countMULT >= 7'd22) & (countMULT <7'd32) )begin
+		else if(offsetNext == 4'b0011 )begin
 			k0 = k02;
 			k1 = k12;
 		end
-		else if((countMULT >= 7'd32) & (countMULT <7'd42) )begin
+		else if(offsetNext == 4'b0100 )begin
 			k0 = k03;
 			k1 = k13;
 		end
-		else if((countMULT >= 7'd42) & (countMULT <7'd52) )begin
+		else if(offsetNext == 4'b0101 )begin
 			k0 = k04;
 			k1 = k14;
 		end
-		else if((countMULT >= 7'd52) & (countMULT <7'd62) )begin
+		else if(offsetNext == 4'b0110)begin
 			k0 = k05;
 			k1 = k15;
 		end
-		else if((countMULT >= 7'd62) & (countMULT <7'd72) )begin
+		else if(offsetNext == 4'b0111 )begin
 			k0 = k06;
 			k1 = k16;
 		end
-		else if((countMULT >= 7'd72) & (countMULT <7'd82) )begin
+		else if(offsetNext == 4'b1000 )begin
 			k0 = k07;
 			k1 = k17;
-		end
-		else if((countMULT >= 7'd82) & (countMULT <7'd92) )begin
-			k0 = k08;
-			k1 = k18;
 		end
 		else begin
 			k0 = k00;
@@ -428,24 +534,15 @@ module CONV_SUB(
 	end
     //---------------------------- NEXT-STATE LOGIC ---------------------------//
 	always @(*) begin
-		if(countMULT == 7'd95)begin
-			countMULTNext = 7'd6;
-		end
+		//countMULT
+		if(countMULT == 5'd25)
+			countMULTNext = 5'd8;
 		else
 			countMULTNext = countMULT + 1;
 	end
 
     always @(*) begin
-		if(offset == 4'b1000 & doneMULT)
-			offsetNext = 4'b0000;
-		else if(doneMULT) begin
-			offsetNext = offset + 4'b0001;
-		end
-		else
-			offsetNext = offset;
-
-
-		if(countMULT == 7'd89)begin
+		if(countMULT == 5'd18)begin
 			//go zigzag
 			if (upperLeft[`ADDRW/2] & upperLeft[0]) begin
                 //Y = odd, X = odd
@@ -495,9 +592,9 @@ module CONV_SUB(
         end
         else begin
             // RESET
-			upperLeft <= 12'hFFF;
+			upperLeft <= {6'b111111,6'b111111};
 			offset <= 4'b0000;
-			countMULT <= 7'd0;
+			countMULT <= 5'd0;
 			sumResult0 <= 0;
 			sumResult1 <= 0;
             convResult0 <= 0;
